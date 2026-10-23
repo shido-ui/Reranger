@@ -4,6 +4,7 @@ import '../../../domain/recipes/render_graph.dart';
 import '../../../domain/recipes/render_graph_node.dart';
 import '../../../domain/recipes/style_render_nodes.dart';
 import '../../../domain/recipes/pixelate_quantize_node.dart';
+import '../../../domain/recipes/artistic_render_nodes.dart';
 
 /// Expanded Presets covering Categories 1 through 6 to complete the canonical 48-preset catalog.
 ///
@@ -188,27 +189,22 @@ class ExpandedPresets {
             sourceWidth: sourceWidth,
             sourceHeight: sourceHeight,
           ),
-          'gray_1': GrayscaleNode(id: 'gray_1', inputNodeId: 'src_0'),
-          'sobel_2': SobelEdgeNode(
-            id: 'sobel_2',
-            inputNodeId: 'gray_1',
-            edgeThreshold: 48,
+          'hatch_1': CrosshatchNode(
+            id: 'hatch_1',
+            inputNodeId: 'src_0',
+            spacing: 6,
+            lineWeight: 1,
+            hatchDensity: density,
+            preserveColor: false,
           ),
-          'ink_3': EdgeInvertSubtractNode(
-            id: 'ink_3',
-            grayInputNodeId: 'gray_1',
-            edgeInputNodeId: 'sobel_2',
-            edgeIntensity: density,
-            contrastGamma: gamma,
-          ),
-          'grain_4': GrainOverlayNode(
-            id: 'grain_4',
-            inputNodeId: 'ink_3',
-            intensity: 0.18,
+          'grain_2': GrainOverlayNode(
+            id: 'grain_2',
+            inputNodeId: 'hatch_1',
+            intensity: 0.10 * (gamma / 1.80),
             seed: 105,
           ),
         },
-        outputNodeId: 'grain_4',
+        outputNodeId: 'grain_2',
       );
     },
   );
@@ -253,27 +249,15 @@ class ExpandedPresets {
             sourceWidth: sourceWidth,
             sourceHeight: sourceHeight,
           ),
-          'gray_1': GrayscaleNode(id: 'gray_1', inputNodeId: 'src_0'),
-          'sobel_2': SobelEdgeNode(
-            id: 'sobel_2',
-            inputNodeId: 'gray_1',
-            edgeThreshold: 32,
-          ),
-          'ink_3': EdgeInvertSubtractNode(
-            id: 'ink_3',
-            grayInputNodeId: 'gray_1',
-            edgeInputNodeId: 'sobel_2',
-            edgeIntensity: weight,
-            contrastGamma: 1.45,
-          ),
-          'grain_4': GrainOverlayNode(
-            id: 'grain_4',
-            inputNodeId: 'ink_3',
-            intensity: dotDensity,
+          'stip_1': StippleNode(
+            id: 'stip_1',
+            inputNodeId: 'src_0',
+            dotDensity: dotDensity * (weight / 0.75),
+            preserveColor: false,
             seed: 106,
           ),
         },
-        outputNodeId: 'grain_4',
+        outputNodeId: 'stip_1',
       );
     },
   );
@@ -451,38 +435,16 @@ class ExpandedPresets {
             sourceWidth: sourceWidth,
             sourceHeight: sourceHeight,
           ),
-          'gray_1': GrayscaleNode(id: 'gray_1', inputNodeId: 'src_0'),
-          'sobel_2': SobelEdgeNode(
-            id: 'sobel_2',
-            inputNodeId: 'gray_1',
-            edgeThreshold: 18,
-          ),
-          'ink_3': EdgeInvertSubtractNode(
-            id: 'ink_3',
-            grayInputNodeId: 'gray_1',
-            edgeInputNodeId: 'sobel_2',
-            edgeIntensity: diff,
-            contrastGamma: gamma,
-          ),
-          'duo_4': DuoToneNode(
-            id: 'duo_4',
-            inputNodeId: 'ink_3',
-            shadowR: 31,
-            shadowG: 48,
-            shadowB: 69,
-            highlightR: 252,
-            highlightG: 244,
-            highlightB: 235,
-            vignetteFalloff: 0.20,
-          ),
-          'grain_5': GrainOverlayNode(
-            id: 'grain_5',
-            inputNodeId: 'duo_4',
-            intensity: 0.08,
-            seed: 202,
+          'wash_1': WatercolorWashNode(
+            id: 'wash_1',
+            inputNodeId: 'src_0',
+            washDiffusion: (diff * 5.0).round().clamp(1, 4),
+            wetEdgeBleed: diff * (gamma / 1.15),
+            paperTooth: 0.16,
+            seed: 4041,
           ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'wash_1',
       );
     },
   );
@@ -1793,38 +1755,22 @@ class ExpandedPresets {
             sourceWidth: sourceWidth,
             sourceHeight: sourceHeight,
           ),
-          'gray_1': GrayscaleNode(id: 'gray_1', inputNodeId: 'src_0'),
-          'sobel_2': SobelEdgeNode(
-            id: 'sobel_2',
-            inputNodeId: 'gray_1',
-            edgeThreshold: 50,
+          'half_1': HalftoneNode(
+            id: 'half_1',
+            inputNodeId: 'src_0',
+            dotPitch: 5,
+            angleDegrees: 45.0,
+            dotIntensity: pressure,
+            preserveColor: true,
           ),
-          'ink_3': EdgeInvertSubtractNode(
-            id: 'ink_3',
-            grayInputNodeId: 'gray_1',
-            edgeInputNodeId: 'sobel_2',
-            edgeIntensity: pressure,
-            contrastGamma: 1.75,
-          ),
-          'duo_4': DuoToneNode(
-            id: 'duo_4',
-            inputNodeId: 'ink_3',
-            shadowR: 30,
-            shadowG: 18,
-            shadowB: 43,
-            highlightR: 255,
-            highlightG: 240,
-            highlightB: 102,
-            vignetteFalloff: 0.12,
-          ),
-          'grain_5': GrainOverlayNode(
-            id: 'grain_5',
-            inputNodeId: 'duo_4',
+          'grain_2': GrainOverlayNode(
+            id: 'grain_2',
+            inputNodeId: 'half_1',
             intensity: grain,
             seed: 505,
           ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'grain_2',
       );
     },
   );
@@ -2301,38 +2247,20 @@ class ExpandedPresets {
             sourceWidth: sourceWidth,
             sourceHeight: sourceHeight,
           ),
-          'gray_1': GrayscaleNode(id: 'gray_1', inputNodeId: 'src_0'),
-          'sobel_2': SobelEdgeNode(
-            id: 'sobel_2',
-            inputNodeId: 'gray_1',
-            edgeThreshold: 52,
+          'poly_1': PolygonalFacetNode(
+            id: 'poly_1',
+            inputNodeId: 'src_0',
+            facetSize: 8,
+            edgeContrast: sharpness,
           ),
-          'ink_3': EdgeInvertSubtractNode(
-            id: 'ink_3',
-            grayInputNodeId: 'gray_1',
-            edgeInputNodeId: 'sobel_2',
-            edgeIntensity: sharpness,
-            contrastGamma: 1.80,
-          ),
-          'duo_4': DuoToneNode(
-            id: 'duo_4',
-            inputNodeId: 'ink_3',
-            shadowR: 23,
-            shadowG: 36,
-            shadowB: 59,
-            highlightR: 221,
-            highlightG: 240,
-            highlightB: 255,
-            vignetteFalloff: vig,
-          ),
-          'grain_5': GrainOverlayNode(
-            id: 'grain_5',
-            inputNodeId: 'duo_4',
-            intensity: 0.12,
+          'grain_2': GrainOverlayNode(
+            id: 'grain_2',
+            inputNodeId: 'poly_1',
+            intensity: vig * 0.5,
             seed: 605,
           ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'grain_2',
       );
     },
   );
@@ -2470,26 +2398,14 @@ class ExpandedPresets {
             paletteLevels: paletteLevels,
             preserveAlpha: true,
           ),
-          'gray_2': GrayscaleNode(id: 'gray_2', inputNodeId: 'pixel_1'),
-          'duo_3': DuoToneNode(
-            id: 'duo_3',
-            inputNodeId: 'gray_2',
-            shadowR: 18,
-            shadowG: 16,
-            shadowB: 36,
-            highlightR: 163,
-            highlightG: 255,
-            highlightB: 133,
-            vignetteFalloff: 0.15,
-          ),
-          'grain_4': GrainOverlayNode(
-            id: 'grain_4',
-            inputNodeId: 'duo_3',
+          'grain_2': GrainOverlayNode(
+            id: 'grain_2',
+            inputNodeId: 'pixel_1',
             intensity: grit,
             seed: 607,
           ),
         },
-        outputNodeId: 'grain_4',
+        outputNodeId: 'grain_2',
       );
     },
   );

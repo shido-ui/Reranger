@@ -136,8 +136,8 @@ class RenderRecipe {
     required String recipeId,
     required String sourceImageHash,
     required String sourceImagePath,
-    String activeStudio = 'recolor',
-    String activePresetId = 'default_natural',
+    String activeStudio = 'style',
+    String activePresetId = 'graphite_pencil',
   }) {
     return RenderRecipe(
       recipeId: recipeId,
@@ -158,6 +158,10 @@ class RenderRecipe {
       updatedAt: DateTime.now().toUtc(),
     );
   }
+
+  /// Returns true if the studio is one of the recognized functional studios.
+  bool get isValidStudio =>
+      const {'style', 'recolor', 'humanize'}.contains(activeStudio);
 
   RenderRecipe copyWith({
     String? activeStudio,

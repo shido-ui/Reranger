@@ -38,11 +38,12 @@ void main() {
           validResult.status,
           equals(C2paStatus.manifestContainerDetectedUnverified),
         );
-        expect(validResult.isValid, isTrue);
+        expect(validResult.isValid, isFalse);
+        expect(validResult.isSignatureVerified, isFalse);
         expect(validResult.isContainerDetected, isTrue);
         // Invariant 7: Honest detection, no fake authority claims
         expect(validResult.manifestIssuer, isNull);
-        expect(validResult.message, contains('unverified'));
+        expect(validResult.message, contains('not verified'));
 
         // 3. Corrupt C2PA Box
         final corruptBytes = Uint8List.fromList([

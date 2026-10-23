@@ -3,6 +3,7 @@ import '../../../domain/presets/preset_parameter.dart';
 import '../../../domain/recipes/render_graph.dart';
 import '../../../domain/recipes/render_graph_node.dart';
 import '../../../domain/recipes/style_render_nodes.dart';
+import '../../../domain/recipes/artistic_render_nodes.dart';
 
 /// Batch C Presets (9 to 12):
 /// 9. Watercolor (Wet Watercolor Bleed)
@@ -14,7 +15,7 @@ class BatchCPresets {
     id: 'watercolor',
     displayName: 'Watercolor',
     category: 'Painting Studio',
-    description: 'Simulated translucent watercolor wash via edge-softened contour subtraction, duotone color grading, and cold-press paper grain overlay.',
+    description: 'Source-conditioned translucent watercolor wash with regional pigment diffusion, wet-edge pigment pooling, and cold-press paper grain overlay.',
     version: 1,
     parameters: const [
       PresetParameter(
@@ -50,38 +51,16 @@ class BatchCPresets {
             sourceWidth: sourceWidth,
             sourceHeight: sourceHeight,
           ),
-          'gray_1': GrayscaleNode(id: 'gray_1', inputNodeId: 'src_0'),
-          'sobel_2': SobelEdgeNode(
-            id: 'sobel_2',
-            inputNodeId: 'gray_1',
-            edgeThreshold: 25,
-          ),
-          'ink_3': EdgeInvertSubtractNode(
-            id: 'ink_3',
-            grayInputNodeId: 'gray_1',
-            edgeInputNodeId: 'sobel_2',
-            edgeIntensity: 0.35,
-            contrastGamma: 1.15,
-          ),
-          'duo_4': DuoToneNode(
-            id: 'duo_4',
-            inputNodeId: 'ink_3',
-            shadowR: 30,
-            shadowG: 55,
-            shadowB: 85,
-            highlightR: 252,
-            highlightG: 248,
-            highlightB: 236,
-            vignetteFalloff: bleed,
-          ),
-          'grain_5': GrainOverlayNode(
-            id: 'grain_5',
-            inputNodeId: 'duo_4',
-            intensity: tooth,
+          'wash_1': WatercolorWashNode(
+            id: 'wash_1',
+            inputNodeId: 'src_0',
+            washDiffusion: (bleed * 4.0).round().clamp(1, 5),
+            wetEdgeBleed: bleed,
+            paperTooth: tooth,
             seed: 4040,
           ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'wash_1',
       );
     },
   );
@@ -90,7 +69,7 @@ class BatchCPresets {
     id: 'oil_paint',
     displayName: 'Oil Paint',
     category: 'Painting Studio',
-    description: 'Simulated classical oil impasto via high-contrast edge contour enhancement, warm tone mapping, and textured linen canvas grain overlay.',
+    description: 'Classical oil impasto with rich pigment body, edge contour structure, and textured linen canvas grain.',
     version: 1,
     parameters: const [
       PresetParameter(
@@ -126,38 +105,23 @@ class BatchCPresets {
             sourceWidth: sourceWidth,
             sourceHeight: sourceHeight,
           ),
-          'gray_1': GrayscaleNode(id: 'gray_1', inputNodeId: 'src_0'),
-          'sobel_2': SobelEdgeNode(
-            id: 'sobel_2',
-            inputNodeId: 'gray_1',
-            edgeThreshold: 40,
-          ),
-          'ink_3': EdgeInvertSubtractNode(
-            id: 'ink_3',
-            grayInputNodeId: 'gray_1',
-            edgeInputNodeId: 'sobel_2',
-            edgeIntensity: 0.45,
-            contrastGamma: contrast,
-          ),
-          'duo_4': DuoToneNode(
-            id: 'duo_4',
-            inputNodeId: 'ink_3',
-            shadowR: 42,
-            shadowG: 24,
-            shadowB: 16,
-            highlightR: 250,
-            highlightG: 220,
-            highlightB: 160,
-            vignetteFalloff: 0.30,
-          ),
-          'grain_5': GrainOverlayNode(
-            id: 'grain_5',
-            inputNodeId: 'duo_4',
-            intensity: canvas,
+          'wash_1': WatercolorWashNode(
+            id: 'wash_1',
+            inputNodeId: 'src_0',
+            washDiffusion: 2,
+            wetEdgeBleed: 0.25,
+            paperTooth: canvas,
             seed: 8812,
           ),
+          'cel_2': CelShadeColorNode(
+            id: 'cel_2',
+            colorInputNodeId: 'wash_1',
+            shadeLevels: 6,
+            inkStrength: 0.0,
+            contrastGamma: contrast,
+          ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'cel_2',
       );
     },
   );
@@ -166,23 +130,23 @@ class BatchCPresets {
     id: 'halftone_pop_art',
     displayName: 'Halftone Pop Art',
     category: 'Graphic & Retro',
-    description: 'Vibrant high-contrast pop art screenprint with saturated neon duotones and halftone dot tooth.',
+    description: 'Vibrant pop art screenprint with genuine tone-responsive halftone screen dots and bold pop colors.',
     version: 1,
     parameters: const [
       PresetParameter(
         id: 'dotIntensity',
-        label: 'Screen Dot Tooth',
-        min: 0.08,
-        max: 0.40,
-        defaultValue: 0.22,
-        step: 0.02,
+        label: 'Screen Dot Density',
+        min: 0.10,
+        max: 1.00,
+        defaultValue: 0.80,
+        step: 0.05,
       ),
       PresetParameter(
         id: 'popContrast',
         label: 'Pop Screen Contrast',
-        min: 1.2,
+        min: 1.0,
         max: 3.0,
-        defaultValue: 1.80,
+        defaultValue: 1.60,
         step: 0.10,
       ),
     ],
@@ -190,8 +154,8 @@ class BatchCPresets {
     thumbnailProvenance: 'Synthetically generated from standard Reranger benchmark fixture via IsolateSceneMapGenerator',
     accessibleLabel: 'Pop Art Litho graphic screenprint style preset',
     buildGraph: (sourceHash, sourceWidth, sourceHeight, params) {
-      final dots = params['dotIntensity'] ?? 0.22;
-      final contrast = params['popContrast'] ?? 1.80;
+      final dots = params['dotIntensity'] ?? 0.80;
+      final contrast = params['popContrast'] ?? 1.60;
 
       return RenderGraph(
         id: 'graph_halftone_pop_art',
@@ -202,38 +166,23 @@ class BatchCPresets {
             sourceWidth: sourceWidth,
             sourceHeight: sourceHeight,
           ),
-          'gray_1': GrayscaleNode(id: 'gray_1', inputNodeId: 'src_0'),
-          'sobel_2': SobelEdgeNode(
-            id: 'sobel_2',
-            inputNodeId: 'gray_1',
-            edgeThreshold: 50,
-          ),
-          'ink_3': EdgeInvertSubtractNode(
-            id: 'ink_3',
-            grayInputNodeId: 'gray_1',
-            edgeInputNodeId: 'sobel_2',
-            edgeIntensity: 0.70,
+          'cel_1': CelShadeColorNode(
+            id: 'cel_1',
+            colorInputNodeId: 'src_0',
+            shadeLevels: 4,
+            inkStrength: 0.0,
             contrastGamma: contrast,
           ),
-          'duo_4': DuoToneNode(
-            id: 'duo_4',
-            inputNodeId: 'ink_3',
-            shadowR: 12,
-            shadowG: 45,
-            shadowB: 110,
-            highlightR: 255,
-            highlightG: 230,
-            highlightB: 90,
-            vignetteFalloff: 0.15,
-          ),
-          'grain_5': GrainOverlayNode(
-            id: 'grain_5',
-            inputNodeId: 'duo_4',
-            intensity: dots,
-            seed: 1968,
+          'half_2': HalftoneNode(
+            id: 'half_2',
+            inputNodeId: 'cel_1',
+            dotPitch: 6,
+            angleDegrees: 45.0,
+            dotIntensity: dots,
+            preserveColor: true,
           ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'half_2',
       );
     },
   );

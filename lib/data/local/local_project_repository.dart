@@ -24,8 +24,8 @@ class LocalProjectRepository implements ProjectRepository {
     // 2. Upsert in database
     database.upsertProject(project.copyWith(isDirty: false));
 
-    // 3. Clear dirty crash journal upon successful save
-    database.clearDirtyJournal();
+    // 3. Clear dirty crash journal upon successful save for this project (Prompt 1.C.3)
+    database.clearDirtyJournal(project.id);
   }
 
   @override
@@ -60,21 +60,46 @@ class LocalProjectRepository implements ProjectRepository {
   }
 
   @override
-  Future<RenderRecipe?> checkDirtyJournal() async {
-    final journal = database.readDirtyJournal();
+  Future<RenderRecipe?> checkDirtyJournal([String? projectId]) async {
+    final journal = database.readDirtyJournal(projectId);
     if (journal == null) return null;
-    return journal['recipe'] as RenderRecipe?;
+    final recipe = journal['recipe'] as RenderRecipe?;
+    if (recipe == null) return null;
+
+    // Validate integrity of journal entry if projectId was specified (Prompt 1.C.2)
+    if (projectId != null) {
+      if (journal['projectId'] != projectId) return null;
+      final expectedRecId = journal['recipeId'] as String?;
+      if (expectedRecId != null &&
+          expectedRecId.isNotEmpty &&
+          expectedRecId != 'unknown_rec' &&
+          recipe.recipeId.isNotEmpty &&
+          expectedRecId != recipe.recipeId) {
+        return null;
+      }
+      final expectedHash = journal['sourceHash'] as String?;
+      if (expectedHash != null &&
+          expectedHash.isNotEmpty &&
+          expectedHash != 'unknown_hash' &&
+          recipe.sourceImageHash.isNotEmpty &&
+          expectedHash != recipe.sourceImageHash) {
+        return null;
+      }
+    }
+    return recipe;
   }
 
   @override
-  Future<void> clearDirtyJournal() async {
-    database.clearDirtyJournal();
+  Future<void> clearDirtyJournal([String? projectId]) async {
+    database.clearDirtyJournal(projectId);
   }
 
   @override
   Future<void> deleteProject(String projectId) async {
     // Delete database entry first
     database.deleteProject(projectId);
+    // Delete dirty journal for this project
+    database.clearDirtyJournal(projectId);
     // Delete private project storage files (leaves user source media intact)
     fileStorage.deleteProjectDirectory(projectId);
   }

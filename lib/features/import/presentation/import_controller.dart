@@ -9,6 +9,7 @@ import '../../../domain/import/image_picker_service.dart';
 import '../../../domain/import/image_staging_service.dart';
 import '../../../domain/project/project_entity.dart';
 import '../../../domain/project/project_repository.dart';
+import '../../presets/data/preset_catalog.dart';
 import '../data/isolate_image_decoder.dart';
 
 /// Concrete, honest processing stages for image analysis.
@@ -343,8 +344,8 @@ class ImportController extends ChangeNotifier {
         recipeId: 'rec_$projectId',
         sourceImageHash: stagedInfo.sha256Checksum,
         sourceImagePath: stagedFilePath,
-        activeStudio: 'recolor',
-        activePresetId: 'default_natural',
+        activeStudio: 'style',
+        activePresetId: PresetCatalog.defaultPresetId,
       );
 
       final rawName = p.basenameWithoutExtension(sourcePath);

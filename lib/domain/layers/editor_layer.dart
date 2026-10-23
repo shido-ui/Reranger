@@ -1,3 +1,4 @@
+import '../recipes/blend_composite_node.dart';
 import '../recipes/recolor_render_node.dart';
 import '../recipes/render_graph.dart';
 import '../recipes/render_graph_node.dart';
@@ -352,13 +353,21 @@ class LayerStack {
       }
 
       if (layer is AdjustmentLayer) {
-        final nodeId = 'node_${layer.id}';
-        RenderGraphNode node;
+        final mask = layer.parameters['maskBase64'] as String?;
+        final isDirectPassThrough =
+            layer.blendMode == BlendModeType.normal &&
+            layer.opacity >= 0.999 &&
+            mask == null;
+        final effectNodeId = isDirectPassThrough
+            ? 'node_${layer.id}'
+            : 'effect_${layer.id}';
+        final baseInputId = currentOutputId;
 
         if (layer.effectType == 'recolor') {
-          node = RecolorNode(
-            id: nodeId,
-            inputNodeId: currentOutputId,
+          final isNormal = layer.blendMode == BlendModeType.normal;
+          final recolorNode = RecolorNode(
+            id: isNormal ? 'node_${layer.id}' : effectNodeId,
+            inputNodeId: baseInputId,
             sourceR: layer.parameters['sourceR'] as int? ?? 0,
             sourceG: layer.parameters['sourceG'] as int? ?? 0,
             sourceB: layer.parameters['sourceB'] as int? ?? 0,
@@ -370,43 +379,76 @@ class LayerStack {
             feather: (layer.parameters['feather'] as num?)?.toDouble() ?? 0.10,
             preserveLuminance:
                 layer.parameters['preserveLuminance'] as bool? ?? true,
-            strength: layer.opacity,
-            maskBase64: layer.parameters['maskBase64'] as String?,
+            strength: isNormal ? layer.opacity : 1.0,
+            maskBase64: isNormal ? mask : null,
           );
-        } else if (layer.effectType == 'duotone') {
-          node = DuoToneNode(
-            id: nodeId,
-            inputNodeId: currentOutputId,
-            shadowR: layer.parameters['shadowR'] as int? ?? 20,
-            shadowG: layer.parameters['shadowG'] as int? ?? 15,
-            shadowB: layer.parameters['shadowB'] as int? ?? 45,
-            highlightR: layer.parameters['highlightR'] as int? ?? 255,
-            highlightG: layer.parameters['highlightG'] as int? ?? 220,
-            highlightB: layer.parameters['highlightB'] as int? ?? 160,
-            vignetteFalloff:
-                (layer.parameters['vignetteFalloff'] as num?)?.toDouble() ??
-                0.0,
-          );
-        } else if (layer.effectType == 'grain') {
-          node = GrainOverlayNode(
-            id: nodeId,
-            inputNodeId: currentOutputId,
-            intensity:
-                (layer.parameters['intensity'] as num?)?.toDouble() ??
-                (layer.opacity * 0.25),
-            seed: layer.seed ?? 42,
-          );
-        } else {
-          // Default Grayscale / neutral fallback
-          node = GrayscaleNode(
-            id: nodeId,
-            inputNodeId: currentOutputId,
-            preserveAlpha: true,
-          );
-        }
+          nodesMap[recolorNode.id] = recolorNode;
 
-        nodesMap[node.id] = node;
-        currentOutputId = node.id;
+          if (isNormal) {
+            currentOutputId = recolorNode.id;
+          } else {
+            final blendNode = BlendCompositeNode(
+              id: 'node_${layer.id}',
+              baseInputNodeId: baseInputId,
+              topInputNodeId: recolorNode.id,
+              blendMode: layer.blendMode.name,
+              opacity: layer.opacity,
+              maskBase64: mask,
+            );
+            nodesMap[blendNode.id] = blendNode;
+            currentOutputId = blendNode.id;
+          }
+        } else {
+          RenderGraphNode effectNode;
+          if (layer.effectType == 'duotone') {
+            effectNode = DuoToneNode(
+              id: effectNodeId,
+              inputNodeId: baseInputId,
+              shadowR: layer.parameters['shadowR'] as int? ?? 20,
+              shadowG: layer.parameters['shadowG'] as int? ?? 15,
+              shadowB: layer.parameters['shadowB'] as int? ?? 45,
+              highlightR: layer.parameters['highlightR'] as int? ?? 255,
+              highlightG: layer.parameters['highlightG'] as int? ?? 220,
+              highlightB: layer.parameters['highlightB'] as int? ?? 160,
+              vignetteFalloff:
+                  (layer.parameters['vignetteFalloff'] as num?)?.toDouble() ??
+                  0.0,
+            );
+          } else if (layer.effectType == 'grain') {
+            effectNode = GrainOverlayNode(
+              id: effectNodeId,
+              inputNodeId: baseInputId,
+              intensity:
+                  (layer.parameters['intensity'] as num?)?.toDouble() ?? 0.20,
+              seed: layer.seed ?? 42,
+            );
+          } else {
+            // Default Grayscale / neutral fallback
+            effectNode = GrayscaleNode(
+              id: effectNodeId,
+              inputNodeId: baseInputId,
+              preserveAlpha: true,
+            );
+          }
+
+          nodesMap[effectNode.id] = effectNode;
+
+          // If normal blend mode and 100% opacity with no mask, effect directly becomes output
+          if (isDirectPassThrough) {
+            currentOutputId = effectNode.id;
+          } else {
+            final blendNode = BlendCompositeNode(
+              id: 'node_${layer.id}',
+              baseInputNodeId: baseInputId,
+              topInputNodeId: effectNode.id,
+              blendMode: layer.blendMode.name,
+              opacity: layer.opacity,
+              maskBase64: mask,
+            );
+            nodesMap[blendNode.id] = blendNode;
+            currentOutputId = blendNode.id;
+          }
+        }
       }
     }
 

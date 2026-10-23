@@ -53,7 +53,7 @@ class _ProToolsSheetState extends State<ProToolsSheet>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 6, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
   }
 
   @override
@@ -175,10 +175,6 @@ class _ProToolsSheetState extends State<ProToolsSheet>
                       ),
                       Tab(icon: Icon(Icons.tune), text: 'Output'),
                       Tab(
-                        icon: Icon(Icons.shield_outlined),
-                        text: 'Stealth Studio',
-                      ),
-                      Tab(
                         icon: Icon(Icons.science_outlined),
                         text: 'Diagnostics Lab',
                       ),
@@ -219,14 +215,6 @@ class _ProToolsSheetState extends State<ProToolsSheet>
                           layerCtrl,
                         ),
                         _buildOutputTab(
-                          theme,
-                          primaryText,
-                          secondaryText,
-                          accentColor,
-                          surfaceBase,
-                          borderSubtle,
-                        ),
-                        _buildStealthStudioTab(
                           theme,
                           primaryText,
                           secondaryText,
@@ -780,161 +768,7 @@ class _ProToolsSheetState extends State<ProToolsSheet>
   }
 
   // ---------------------------------------------------------------------------
-  // TAB 5: Stealth Studio (PO Addendum)
-  // ---------------------------------------------------------------------------
-  Widget _buildStealthStudioTab(
-    ThemeData theme,
-    Color primaryText,
-    Color secondaryText,
-    Color accentColor,
-    Color surfaceBase,
-    Color borderSubtle,
-  ) {
-    final controller = widget.controller;
-    return ListView(
-      padding: const EdgeInsets.all(AppSpacingTokens.md),
-      children: [
-        Text(
-          'Stealth Studio',
-          style: theme.textTheme.titleMedium?.copyWith(
-            color: primaryText,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: AppSpacingTokens.xs),
-        Text(
-          'Targeted FGSM mathematical perturbations to disrupt CNN-based AI detector confidence scores.',
-          style: theme.textTheme.bodySmall?.copyWith(color: secondaryText),
-        ),
-        const SizedBox(height: AppSpacingTokens.md),
-
-        // Warning Label (Mandatory as per PO Directive)
-        Container(
-          padding: const EdgeInsets.all(AppSpacingTokens.sm),
-          decoration: BoxDecoration(
-            color: Colors.amber.withValues(alpha: 0.15),
-            borderRadius: AppRadiusTokens.borderMd,
-            border: Border.all(color: Colors.amber.shade700),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                Icons.warning_amber_rounded,
-                color: Colors.amber.shade300,
-                size: 20,
-              ),
-              const SizedBox(width: AppSpacingTokens.xs),
-              Expanded(
-                child: Text(
-                  'This applies adversarial noise optimized to disrupt AI detection algorithms. It does not guarantee human authorship.',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: Colors.amber.shade100,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: AppSpacingTokens.md),
-
-        // Enable Toggle
-        Material(
-          color: surfaceBase,
-          shape: RoundedRectangleBorder(
-            borderRadius: AppRadiusTokens.borderMd,
-            side: BorderSide(color: borderSubtle),
-          ),
-          child: SwitchListTile(
-            title: const Text('Enable Adversarial Stealth'),
-            subtitle: const Text(
-              'Injects targeted perturbation node before export',
-            ),
-            value: controller.isStealthEnabled,
-            onChanged: (val) {
-              controller.setStealthEnabled(val);
-              setState(() {});
-            },
-          ),
-        ),
-        const SizedBox(height: AppSpacingTokens.md),
-
-        // Adversarial Strength Slider (0.0 to 1.0)
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              'Adversarial Strength',
-              style: theme.textTheme.titleSmall?.copyWith(
-                color: primaryText,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            Text(
-              controller.stealthStrength.toStringAsFixed(2),
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: secondaryText,
-                fontFamily: 'monospace',
-              ),
-            ),
-          ],
-        ),
-        Slider(
-          min: 0.0,
-          max: 1.0,
-          value: controller.stealthStrength,
-          onChanged: (val) {
-            controller.setStealthStrength(val);
-            setState(() {});
-          },
-        ),
-        const SizedBox(height: AppSpacingTokens.xs),
-
-        // Apply Frequency Perturbation Toggle
-        Material(
-          color: surfaceBase,
-          shape: RoundedRectangleBorder(
-            borderRadius: AppRadiusTokens.borderMd,
-            side: BorderSide(color: borderSubtle),
-          ),
-          child: SwitchListTile(
-            title: const Text('Apply Frequency Perturbation'),
-            subtitle: const Text(
-              'Phase-modulated high-pass harmonic disruption',
-            ),
-            value: controller.stealthApplyFrequency,
-            onChanged: (val) {
-              controller.setStealthApplyFrequency(val);
-              setState(() {});
-            },
-          ),
-        ),
-        const SizedBox(height: AppSpacingTokens.md),
-
-        // Preview Button
-        OutlinedButton.icon(
-          icon: Icon(
-            controller.isPreviewingStealth
-                ? Icons.visibility_off
-                : Icons.visibility,
-          ),
-          label: Text(
-            controller.isPreviewingStealth
-                ? 'Stop Preview'
-                : 'Preview Noise Impact',
-          ),
-          onPressed: () {
-            controller.toggleStealthPreview();
-            setState(() {});
-          },
-        ),
-      ],
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // TAB 6: Diagnostics Lab (PO Addendum)
+  // TAB 5: Diagnostics Lab (Test & Research Harness)
   // ---------------------------------------------------------------------------
   Widget _buildDiagnosticsLabTab(
     ThemeData theme,
@@ -948,7 +782,7 @@ class _ProToolsSheetState extends State<ProToolsSheet>
       padding: const EdgeInsets.all(AppSpacingTokens.md),
       children: [
         Text(
-          'Diagnostics Lab',
+          'Diagnostics Lab (Test & Research Harness)',
           style: theme.textTheme.titleMedium?.copyWith(
             color: primaryText,
             fontWeight: FontWeight.bold,
@@ -956,7 +790,9 @@ class _ProToolsSheetState extends State<ProToolsSheet>
         ),
         const SizedBox(height: AppSpacingTokens.xs),
         Text(
-          'Evaluate local image corpora against mock detector adapters and inspect C2PA provenance.',
+          'Inspect image metadata and evaluate local test corpora against test-only simulation adapters. '
+          'Note: Mock adapters derive scores from fixture labels for pipeline testing and do not analyze image pixels. '
+          'Provenance detection identifies raw byte markers; cryptographic verification requires an on-device PKI trust root.',
           style: theme.textTheme.bodySmall?.copyWith(color: secondaryText),
         ),
         const SizedBox(height: AppSpacingTokens.md),
@@ -1126,9 +962,9 @@ class _ProToolsSheetState extends State<ProToolsSheet>
             child: Column(
               children: [
                 _buildMetricRow(
-                  'Valid C2PA Signatures',
+                  'C2PA Container Markers (Unverified)',
                   '${_benchmarkMetrics!.c2paValidCount}',
-                  Colors.green,
+                  Colors.amber,
                 ),
                 _buildMetricRow(
                   'Corrupt / Invalid Boxes',
@@ -1138,7 +974,7 @@ class _ProToolsSheetState extends State<ProToolsSheet>
                 _buildMetricRow(
                   'Missing Provenance',
                   '${_benchmarkMetrics!.c2paMissingCount}',
-                  Colors.amber,
+                  secondaryText,
                 ),
               ],
             ),

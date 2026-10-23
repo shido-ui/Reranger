@@ -75,6 +75,18 @@ class RenderMemoryLimitFailure extends RenderPipelineFailure {
       );
 }
 
+/// Thrown when declared source image identity does not match verified byte digest.
+class RenderSourceIntegrityFailure extends RenderPipelineFailure {
+  final String declaredHash;
+  final String actualHash;
+  const RenderSourceIntegrityFailure({
+    required this.declaredHash,
+    required this.actualHash,
+  }) : super(
+         'Source image integrity failure: declared hash ($declaredHash) does not match actual byte digest ($actualHash)',
+       );
+}
+
 /// Thrown when an individual node fails during pixel processing.
 class RenderNodeExecutionFailure extends RenderPipelineFailure {
   final String nodeId;

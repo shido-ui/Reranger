@@ -193,6 +193,36 @@ class UpdateAdjustmentParametersCommand extends EditCommand {
   int estimateBytes() => 128 + layerId.length + (newParameters.length * 32);
 }
 
+/// Changes a fine-tune recipe slider parameter via an undoable command.
+class SetParameterCommand extends EditCommand {
+  final String parameterId;
+  final double oldValue;
+  final double newValue;
+  final void Function(String id, double val)? onApply;
+
+  SetParameterCommand({
+    required this.parameterId,
+    required this.oldValue,
+    required this.newValue,
+    this.onApply,
+  }) : super('Set parameter $parameterId');
+
+  @override
+  LayerStack execute(LayerStack current) {
+    onApply?.call(parameterId, newValue);
+    return current;
+  }
+
+  @override
+  LayerStack undo(LayerStack current) {
+    onApply?.call(parameterId, oldValue);
+    return current;
+  }
+
+  @override
+  int estimateBytes() => 64 + parameterId.length;
+}
+
 /// Compound command batching multiple granular commands atomically.
 class CompoundCommand extends EditCommand {
   final List<EditCommand> commands;

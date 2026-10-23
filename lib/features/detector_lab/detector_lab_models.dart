@@ -19,7 +19,7 @@ enum C2paStatus {
   String get label {
     switch (this) {
       case C2paStatus.manifestContainerDetectedUnverified:
-        return 'C2PA Container Detected (Signature Unverified)';
+        return 'Metadata marker present; cryptographic signature not verified';
       case C2paStatus.invalid:
         return 'Corrupt or Malformed C2PA Box';
       case C2paStatus.missing:
@@ -40,9 +40,18 @@ class C2paProvenanceResult {
     required this.message,
   });
 
-  bool get isValid => status == C2paStatus.manifestContainerDetectedUnverified;
+  /// True if raw metadata marker sequence was located in media bytes.
   bool get isContainerDetected =>
       status == C2paStatus.manifestContainerDetectedUnverified;
+
+  /// Cryptographic signature verification is strictly false for raw byte marker inspection.
+  bool get isSignatureVerified => false;
+
+  @Deprecated(
+    'A raw byte marker does not verify a signature. Use isContainerDetected instead.',
+  )
+  bool get isValid => false;
+
   bool get isMissing => status == C2paStatus.missing;
 }
 
@@ -83,7 +92,7 @@ class C2paParser {
         return const C2paProvenanceResult(
           status: C2paStatus.manifestContainerDetectedUnverified,
           manifestIssuer: null,
-          message: 'C2PA manifest container detected. Signature is unverified (cryptographic validation requires on-device PKI trust root).',
+          message: 'Metadata marker present; cryptographic signature not verified (requires on-device PKI trust root).',
         );
       } else {
         return const C2paProvenanceResult(
@@ -145,7 +154,11 @@ abstract class DetectorAdapter {
   });
 }
 
-/// Mock detector simulating realistic CNN-based classifier outputs.
+/// [TEST-ONLY] Mock detector simulating synthetic classifier outputs for harness testing.
+///
+/// IMPORTANT (Invariant 7 & Product Prompt 5): This adapter is NOT an AI detector and does
+/// not evaluate image pixels. Scores are synthetic values derived from test fixture labels
+/// for testing the benchmark runner. It must never be presented as an actual detector.
 class MockDetectorAdapter implements DetectorAdapter {
   @override
   final String name;
@@ -155,7 +168,7 @@ class MockDetectorAdapter implements DetectorAdapter {
   final Map<String, double>? fixedConfidenceScores;
 
   MockDetectorAdapter({
-    this.name = 'Mock Detector v1 (ResNet-50 Classifier)',
+    this.name = '[TEST ONLY] Synthetic Classifier Simulation',
     this.version = '1.0.0',
     this.fixedConfidenceScores,
   });

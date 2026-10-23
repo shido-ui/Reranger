@@ -11,7 +11,10 @@ void main() {
 
   group('HumanizeAdapter Contract & Hardware Tier Gating', () {
     test('Flagship device (>= 8 GB RAM) reports full 512x512 resolution and OpenRAIL-M license', () async {
-      final adapter = LocalHumanizeAdapter(totalRamBytes: 12 * gb);
+      final adapter = LocalHumanizeAdapter(
+        totalRamBytes: 12 * gb,
+        isLoadedForTesting: true,
+      );
       final caps = await adapter.getCapabilities();
 
       expect(caps.isSupported, isTrue);
@@ -28,7 +31,10 @@ void main() {
     });
 
     test('Constrained device (6 GB to 8 GB RAM) reports downscaled 384x384 resolution', () async {
-      final adapter = LocalHumanizeAdapter(totalRamBytes: 6 * gb);
+      final adapter = LocalHumanizeAdapter(
+        totalRamBytes: 6 * gb,
+        isLoadedForTesting: true,
+      );
       final caps = await adapter.getCapabilities();
 
       expect(caps.isSupported, isTrue);

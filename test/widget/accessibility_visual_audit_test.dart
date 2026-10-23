@@ -199,7 +199,10 @@ void main() {
       '4. HumanizeScreen progress overlay declares liveRegion semantics and 48dp cancel target',
       (tester) async {
         final humanize = HumanizeController(
-          adapter: LocalHumanizeAdapter(totalRamBytes: 12 * gb),
+          adapter: LocalHumanizeAdapter(
+            totalRamBytes: 12 * gb,
+            isLoadedForTesting: true,
+          ),
         );
         await humanize.initialize(
           sourceImageBytes: testImageBytes,

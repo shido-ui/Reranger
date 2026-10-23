@@ -119,6 +119,55 @@ class ProjectDatabase {
         db.execute('ALTER TABLE projects ADD COLUMN tags TEXT;');
       },
     ),
+    DatabaseMigration(
+      targetVersion: 3,
+      description: 'Make dirty_journal project-scoped with schema and integrity validation',
+      migrate: (db) {
+        db.execute('''
+          CREATE TABLE dirty_journal_v3 (
+            project_id TEXT PRIMARY KEY,
+            recipe_id TEXT NOT NULL,
+            source_hash TEXT NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            recipe_json TEXT NOT NULL,
+            written_at TEXT NOT NULL
+          );
+        ''');
+
+        // Migrate existing dirty_journal entries if any
+        final existingRows = db.select(
+          'SELECT project_id, recipe_json, written_at FROM dirty_journal;',
+        );
+        for (final row in existingRows) {
+          final pid = row['project_id'] as String?;
+          final rJson = row['recipe_json'] as String;
+          final wAt = row['written_at'] as String;
+          if (pid != null && pid.isNotEmpty) {
+            String recId = 'unknown_rec';
+            String sHash = 'unknown_hash';
+            int sVersion = 1;
+            try {
+              final parsed = jsonDecode(rJson) as Map<String, dynamic>;
+              recId = parsed['recipeId'] as String? ?? 'unknown_rec';
+              sHash = parsed['sourceImageHash'] as String? ?? 'unknown_hash';
+              sVersion = (parsed['recipeVersion'] as num?)?.toInt() ?? 1;
+            } catch (_) {}
+
+            db.execute(
+              '''
+              INSERT OR REPLACE INTO dirty_journal_v3
+              (project_id, recipe_id, source_hash, schema_version, recipe_json, written_at)
+              VALUES (?, ?, ?, ?, ?, ?);
+            ''',
+              [pid, recId, sHash, sVersion, rJson, wAt],
+            );
+          }
+        }
+
+        db.execute('DROP TABLE dirty_journal;');
+        db.execute('ALTER TABLE dirty_journal_v3 RENAME TO dirty_journal;');
+      },
+    ),
   ];
 
   void _runMigrations() {
@@ -272,33 +321,50 @@ class ProjectDatabase {
   }
 
   /// Atomic crash recovery: records uncommitted dirty recipe to the journal.
+  /// Atomic crash recovery: records uncommitted dirty recipe to the project-scoped journal.
   void writeDirtyJournal(String projectId, RenderRecipe recipe) {
     _db.execute(
       '''
-      INSERT INTO dirty_journal (id, project_id, recipe_json, written_at)
-      VALUES (1, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        project_id = excluded.project_id,
+      INSERT INTO dirty_journal (project_id, recipe_id, source_hash, schema_version, recipe_json, written_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id) DO UPDATE SET
+        recipe_id = excluded.recipe_id,
+        source_hash = excluded.source_hash,
+        schema_version = excluded.schema_version,
         recipe_json = excluded.recipe_json,
         written_at = excluded.written_at;
     ''',
       [
         projectId,
+        recipe.recipeId,
+        recipe.sourceImageHash,
+        recipe.recipeVersion,
         jsonEncode(recipe.toJson()),
         DateTime.now().toUtc().toIso8601String(),
       ],
     );
   }
 
-  /// Checks if an active dirty journal exists (indicates previous abnormal termination).
-  Map<String, dynamic>? readDirtyJournal() {
-    final result = _db.select(
-      'SELECT * FROM dirty_journal WHERE id = 1 LIMIT 1;',
-    );
+  /// Checks if an active dirty journal exists for [projectId] (or latest if [projectId] is omitted).
+  Map<String, dynamic>? readDirtyJournal([String? projectId]) {
+    final ResultSet result;
+    if (projectId != null) {
+      result = _db.select(
+        'SELECT * FROM dirty_journal WHERE project_id = ? LIMIT 1;',
+        [projectId],
+      );
+    } else {
+      result = _db.select(
+        'SELECT * FROM dirty_journal ORDER BY written_at DESC LIMIT 1;',
+      );
+    }
     if (result.isEmpty) return null;
     final row = result.first;
     return {
       'projectId': row['project_id'] as String,
+      'recipeId': row['recipe_id'] as String? ?? '',
+      'sourceHash': row['source_hash'] as String? ?? '',
+      'schemaVersion': (row['schema_version'] as num?)?.toInt() ?? 1,
       'recipe': RenderRecipe.fromJson(
         jsonDecode(row['recipe_json'] as String) as Map<String, dynamic>,
       ),
@@ -306,9 +372,15 @@ class ProjectDatabase {
     };
   }
 
-  /// Clears the dirty journal on clean save or project close.
-  void clearDirtyJournal() {
-    _db.execute('DELETE FROM dirty_journal WHERE id = 1;');
+  /// Clears the dirty journal for [projectId] (or all projects if [projectId] is omitted).
+  void clearDirtyJournal([String? projectId]) {
+    if (projectId != null) {
+      _db.execute('DELETE FROM dirty_journal WHERE project_id = ?;', [
+        projectId,
+      ]);
+    } else {
+      _db.execute('DELETE FROM dirty_journal;');
+    }
   }
 
   /// Caches an analysis scene map so projects reopen instantly without re-analysis.

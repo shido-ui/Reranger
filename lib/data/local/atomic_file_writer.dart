@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
 import '../../domain/project/project_entity.dart';
@@ -19,18 +20,56 @@ class AtomicWriteResult {
 }
 
 /// Disk space provider abstraction to allow testing low-storage handling.
+/// Returns available bytes, or null if platform capacity cannot be measured.
 abstract interface class StorageCapacityChecker {
-  Future<int> getAvailableDiskBytes(String directoryPath);
+  Future<int?> getAvailableDiskBytes(String directoryPath);
 }
 
 /// Default storage checker querying the host file system.
 class DefaultStorageCapacityChecker implements StorageCapacityChecker {
+  static const MethodChannel _storageChannel = MethodChannel(
+    'com.reranger.app/storage',
+  );
+
   const DefaultStorageCapacityChecker();
 
   @override
-  Future<int> getAvailableDiskBytes(String directoryPath) async {
-    // Return a generous default if unable to inspect, or query stat
-    return 1024 * 1024 * 1024; // 1 GB fallback headroom
+  Future<int?> getAvailableDiskBytes(String directoryPath) async {
+    // 1. Query Android platform channel (File.usableSpace)
+    try {
+      final int? bytes = await _storageChannel.invokeMethod<int>(
+        'getAvailableBytes',
+        {'path': directoryPath},
+      );
+      if (bytes != null && bytes >= 0) {
+        return bytes;
+      }
+    } catch (_) {
+      // Platform channel unavailable (desktop, iOS, or test runner)
+    }
+
+    // 2. POSIX fallback (Linux / macOS)
+    if (Platform.isLinux || Platform.isMacOS) {
+      try {
+        final result = await Process.run('df', ['-k', directoryPath]);
+        if (result.exitCode == 0) {
+          final lines = (result.stdout as String).trim().split('\n');
+          if (lines.length >= 2) {
+            final tokens = lines.last.split(RegExp(r'\s+'));
+            // df output: Filesystem 1K-blocks Used Available Use% Mounted on
+            if (tokens.length >= 4) {
+              final availKb = int.tryParse(tokens[3]);
+              if (availKb != null) {
+                return availKb * 1024;
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 3. Safe, explicit "capacity unknown" fallback (Prompt 6.A.3)
+    return null;
   }
 }
 
@@ -77,15 +116,18 @@ class AtomicFileWriter {
     final availableBytes = await capacityChecker.getAvailableDiskBytes(
       targetDir.path,
     );
-    final requiredBytes = bytes.length + minimumHeadroomMargin;
-    if (availableBytes < requiredBytes) {
-      throw LowStorageFailure(requiredBytes, availableBytes);
+    if (availableBytes != null) {
+      final requiredBytes = bytes.length + minimumHeadroomMargin;
+      if (availableBytes < requiredBytes) {
+        throw LowStorageFailure(requiredBytes, availableBytes);
+      }
     }
 
     // 3. Temporary Sibling File
     final timestamp = DateTime.now().microsecondsSinceEpoch;
     final tempFilePath = '$destinationPath.tmp.$pid.$timestamp';
     final tempFile = File(tempFilePath);
+    File? backupFile;
 
     try {
       // Write bytes and flush to physical storage
@@ -97,20 +139,13 @@ class AtomicFileWriter {
       // 4. Checksum computation
       final digest = sha256.convert(bytes).toString();
 
-      // 5. Atomic Rename / Safe Replace with Backup Rollback (DEF-024)
-      File? backupFile;
+      // 5. Atomic Rename / Safe Replace with Backup Rollback (DEF-024 & Prompt 6.A.4)
       if (targetFile.existsSync()) {
         final backupPath = '$destinationPath.bak.$pid.$timestamp';
         try {
-          backupFile = targetFile.renameSync(backupPath);
+          backupFile = targetFile.copySync(backupPath);
         } catch (_) {
-          // Fallback if atomic rename across volumes or non-POSIX file system
-          try {
-            backupFile = targetFile.copySync(backupPath);
-            targetFile.deleteSync();
-          } catch (_) {
-            backupFile = null;
-          }
+          backupFile = null;
         }
       }
 
@@ -123,14 +158,31 @@ class AtomicFileWriter {
           } catch (_) {}
         }
       } catch (renameErr) {
-        // Rollback: restore original file from backup so user data is never lost
-        if (backupFile != null && backupFile.existsSync()) {
-          try {
-            if (targetFile.existsSync()) targetFile.deleteSync();
-            backupFile.renameSync(destinationPath);
-          } catch (_) {}
+        // Fallback: cross-device or permission copy
+        bool fallbackSucceeded = false;
+        try {
+          tempFile.copySync(destinationPath);
+          tempFile.deleteSync();
+          fallbackSucceeded = true;
+          if (backupFile != null && backupFile.existsSync()) {
+            try {
+              backupFile.deleteSync();
+            } catch (_) {}
+          }
+        } catch (_) {
+          fallbackSucceeded = false;
         }
-        rethrow;
+
+        if (!fallbackSucceeded) {
+          // Rollback: restore original file from backup so user data is never lost
+          if (backupFile != null && backupFile.existsSync()) {
+            try {
+              if (targetFile.existsSync()) targetFile.deleteSync();
+              backupFile.renameSync(destinationPath);
+            } catch (_) {}
+          }
+          rethrow;
+        }
       }
 
       return AtomicWriteResult(
@@ -143,6 +195,15 @@ class AtomicFileWriter {
       if (tempFile.existsSync()) {
         try {
           tempFile.deleteSync();
+        } catch (_) {}
+      }
+      if (backupFile != null && backupFile.existsSync()) {
+        try {
+          if (!targetFile.existsSync()) {
+            backupFile.renameSync(destinationPath);
+          } else {
+            backupFile.deleteSync();
+          }
         } catch (_) {}
       }
       if (e is ProjectFailure) rethrow;

@@ -12,7 +12,8 @@ import '../local/project_file_storage.dart';
 import 'project_package_models.dart';
 
 /// Validates, unpacks, and registers portable Reranger project packages (.rrproj / .reranger).
-/// Enforces strict Zip-Slip protection, archive bomb limits, checksum verification, and duplicate-name resolution (DEF-026).
+/// Enforces safe streaming preflight, archive bomb limits, Zip-Slip protection, checksum verification,
+/// duplicate-name resolution, and rollback on failure (DEF-026 & Prompt 6.A).
 class ProjectPackageImporter {
   final ProjectDatabase database;
   final ProjectFileStorage fileStorage;
@@ -24,7 +25,13 @@ class ProjectPackageImporter {
   /// Maximum allowed uncompressed size (250 MB).
   static const int maxTotalUnpackedBytes = 250 * 1024 * 1024;
 
-  /// Maximum allowed compression ratio to prevent zip bombs.
+  /// Maximum allowed uncompressed size per individual entry (100 MB).
+  static const int maxPerEntryBytes = 100 * 1024 * 1024;
+
+  /// Maximum allowed compressed archive size (200 MB).
+  static const int maxCompressedBytes = 200 * 1024 * 1024;
+
+  /// Maximum allowed compression ratio to prevent zip bombs (100:1).
   static const double maxCompressionRatio = 100.0;
 
   const ProjectPackageImporter({
@@ -34,7 +41,8 @@ class ProjectPackageImporter {
   });
 
   /// Imports and unpacks [packageFile], registering the project in local SQLite and filesystem sandbox.
-  /// Throws [SecurityFailure] on any path traversal attempt or archive bomb.
+  /// Enforces limits before or during decompression using a safe streaming/preflight design.
+  /// Throws [SecurityFailure] on any path traversal attempt, zip bomb, or undeclared file.
   /// Throws [FormatFailure] or [ChecksumMismatchFailure] if package is corrupted.
   /// Throws [LowStorageFailure] if disk space is insufficient.
   Future<ProjectEntity> importPackage(File packageFile) async {
@@ -45,63 +53,174 @@ class ProjectPackageImporter {
       );
     }
 
-    final packageBytes = await packageFile.readAsBytes();
-
-    // 1. Verify ZIP header (magic 0x04034B50: 'PK\x03\x04')
-    if (packageBytes.length < 4 ||
-        packageBytes[0] != 0x50 ||
-        packageBytes[1] != 0x4B ||
-        packageBytes[2] != 0x03 ||
-        packageBytes[3] != 0x04) {
+    final compressedSize = packageFile.lengthSync();
+    if (compressedSize < 22) {
       throw const FormatFailure(
-        'Invalid package format: File is not a valid zip archive.',
+        'Invalid package format: File is too small to be a valid zip archive.',
+      );
+    }
+    if (compressedSize > maxCompressedBytes) {
+      throw SecurityFailure(
+        'Security violation: Package file exceeds maximum compressed size of $maxCompressedBytes bytes.',
       );
     }
 
-    Archive archive;
+    // 1. Safe Preflight: Read Central Directory structure without decompressing content bytes
+    final inputStream = InputFileStream(packageFile.path);
+    final zipDir = ZipDirectory();
     try {
-      archive = ZipDecoder().decodeBytes(packageBytes);
+      zipDir.read(inputStream);
     } catch (e) {
+      inputStream.close();
       throw FormatFailure('Corrupted zip archive: $e');
     }
 
-    // 2. Strict Security: Archive Bomb & Zip-Slip Protection
-    if (archive.files.length > maxArchiveEntryCount) {
+    if (zipDir.fileHeaders.isEmpty) {
+      inputStream.close();
+      throw const FormatFailure(
+        'Invalid package: Archive contains zero entries.',
+      );
+    }
+
+    // 2. Preflight Security & Limits: Bomb, Zip-Slip, Paths, and Entry Bounds
+    if (zipDir.fileHeaders.length > maxArchiveEntryCount) {
+      inputStream.close();
       throw SecurityFailure(
         'Security violation: Archive exceeds maximum entry count of $maxArchiveEntryCount entries.',
       );
     }
 
     int totalUnpackedBytes = 0;
-    for (final file in archive.files) {
-      totalUnpackedBytes += file.size;
+    final seenPaths = <String>{};
+    bool hasManifest = false;
+    final sourceEntryNames = <String>[];
 
-      final name = file.name.replaceAll('\\', '/');
+    for (final header in zipDir.fileHeaders) {
+      final name = header.filename.replaceAll('\\', '/');
+
+      // Zip-Slip / Path Traversal / Null bytes check
       if (name.contains('..') ||
           name.contains('\x00') ||
           name.startsWith('/') ||
+          name.startsWith('\\') ||
           name.contains(':') ||
           p.isAbsolute(name)) {
+        inputStream.close();
         throw SecurityFailure(
           'Security violation: Potential Zip-Slip / path traversal detected in archive entry: "$name"',
+        );
+      }
+
+      // Symlinks / Special Entries check (mode 0xa000 symlinks, sockets, fifos)
+      final mode = header.externalFileAttributes >> 16;
+      final fileType = mode & 0xf000;
+      if (fileType != 0 && fileType != 0x8000 && fileType != 0x4000) {
+        inputStream.close();
+        throw SecurityFailure(
+          'Security violation: Archive contains symlink or special entry: "$name"',
+        );
+      }
+
+      // Duplicate entries check
+      if (seenPaths.contains(name)) {
+        inputStream.close();
+        throw SecurityFailure(
+          'Security violation: Duplicate entry in archive: "$name"',
+        );
+      }
+      seenPaths.add(name);
+
+      // Per-entry uncompressed size limit
+      if (header.uncompressedSize > maxPerEntryBytes) {
+        inputStream.close();
+        throw SecurityFailure(
+          'Security violation: Entry "$name" uncompressed size (${header.uncompressedSize} bytes) exceeds limit of $maxPerEntryBytes bytes.',
+        );
+      }
+
+      totalUnpackedBytes += header.uncompressedSize;
+
+      // Allowed path structure
+      if (name == 'manifest.json') {
+        hasManifest = true;
+      } else if (name == 'recipe.json' || name == 'project.json') {
+        // Valid root metadata entries
+      } else if (name.startsWith('source/')) {
+        if (!name.endsWith('/')) {
+          final sub = name.substring('source/'.length);
+          if (sub.contains('/')) {
+            inputStream.close();
+            throw SecurityFailure(
+              'Security violation: Nested subdirectories in source/ not permitted: "$name"',
+            );
+          }
+          sourceEntryNames.add(name);
+        }
+      } else if (name.startsWith('masks/')) {
+        if (!name.endsWith('/')) {
+          final sub = name.substring('masks/'.length);
+          if (sub.contains('/')) {
+            inputStream.close();
+            throw SecurityFailure(
+              'Security violation: Nested subdirectories in masks/ not permitted: "$name"',
+            );
+          }
+        }
+      } else {
+        inputStream.close();
+        throw SecurityFailure(
+          'Security violation: Disallowed or unexpected file path in package: "$name"',
         );
       }
     }
 
     if (totalUnpackedBytes > maxTotalUnpackedBytes) {
+      inputStream.close();
       throw SecurityFailure(
         'Security violation: Archive uncompressed size ($totalUnpackedBytes bytes) exceeds maximum allowable limit of $maxTotalUnpackedBytes bytes.',
       );
     }
 
-    if (packageBytes.isNotEmpty &&
-        (totalUnpackedBytes / packageBytes.length) > maxCompressionRatio) {
+    if (compressedSize > 0 &&
+        (totalUnpackedBytes / compressedSize) > maxCompressionRatio) {
+      inputStream.close();
       throw SecurityFailure(
         'Security violation: Potential zip bomb detected. Compression ratio exceeds $maxCompressionRatio:1.',
       );
     }
 
-    // 3. Locate and Parse Manifest
+    if (!hasManifest) {
+      inputStream.close();
+      throw const FormatFailure(
+        'Invalid package: "manifest.json" was not found in archive.',
+      );
+    }
+
+    // 3. Preflight Storage Headroom Check before file decompression
+    final availableBytes = await capacityChecker.getAvailableDiskBytes(
+      fileStorage.projectsDir.path,
+    );
+    if (availableBytes != null) {
+      final requiredBytes =
+          totalUnpackedBytes + AtomicFileWriter.minimumHeadroomMargin;
+      if (availableBytes < requiredBytes) {
+        inputStream.close();
+        throw LowStorageFailure(requiredBytes, availableBytes);
+      }
+    }
+
+    // 4. Decode Archive Stream
+    inputStream.setPosition(0);
+    final Archive archive;
+    try {
+      archive = ZipDecoder().decodeStream(inputStream);
+    } catch (e) {
+      throw FormatFailure('Corrupted zip archive: $e');
+    } finally {
+      inputStream.close();
+    }
+
+    // 5. Locate, Parse, and Validate Manifest
     final manifestEntry = archive.findFile('manifest.json');
     if (manifestEntry == null) {
       throw const FormatFailure(
@@ -109,7 +228,7 @@ class ProjectPackageImporter {
       );
     }
 
-    ProjectPackageManifest manifest;
+    final ProjectPackageManifest manifest;
     try {
       final manifestJson = jsonDecode(
         utf8.decode(manifestEntry.content as List<int>),
@@ -124,8 +243,19 @@ class ProjectPackageImporter {
         'Unsupported package format: expected "$kRerangerPackageFormatId" but got "${manifest.format}"',
       );
     }
+    if (manifest.sourceImageHash.isEmpty) {
+      throw const FormatFailure('Malformed manifest: sourceImageHash is empty');
+    }
+    if (manifest.projectName.isEmpty) {
+      throw const FormatFailure('Malformed manifest: projectName is empty');
+    }
+    if (manifest.files.isEmpty) {
+      throw const FormatFailure(
+        'Malformed manifest: files list cannot be empty',
+      );
+    }
 
-    // 4. Verify Checksums of All Declared Files
+    // 6. Verify Checksums of All Declared Files & Checksum Completeness
     for (final entry in manifest.files.entries) {
       final relativePath = entry.key;
       final expectedSha = entry.value;
@@ -145,17 +275,44 @@ class ProjectPackageImporter {
       }
     }
 
-    // 5. Storage Headroom Check
-    final availableBytes = await capacityChecker.getAvailableDiskBytes(
-      fileStorage.projectsDir.path,
-    );
-    final requiredBytes =
-        totalUnpackedBytes + AtomicFileWriter.minimumHeadroomMargin;
-    if (availableBytes < requiredBytes) {
-      throw LowStorageFailure(requiredBytes, availableBytes);
+    // Reject package if archive contains files not declared in manifest
+    for (final file in archive.files) {
+      final name = file.name.replaceAll('\\', '/');
+      if (name == 'manifest.json' ||
+          name == 'recipe.json' ||
+          name == 'project.json' ||
+          name.endsWith('/')) {
+        continue;
+      }
+      if (!manifest.files.containsKey(name)) {
+        throw SecurityFailure(
+          'Security violation: Archive contains undeclared file: "$name"',
+        );
+      }
     }
 
-    // 6. Resolve Duplicate Project Name to prevent SQLite unique constraint violation (DEF-022)
+    // 7. Source Image Verification: Checksum must match declared sourceImageHash
+    final sourceRelativePath = sourceEntryNames.first;
+    final sourceArchiveFile = archive.findFile(sourceRelativePath);
+    if (sourceArchiveFile == null) {
+      throw FormatFailure(
+        'Package corrupted: Declared source image "$sourceRelativePath" not found in archive.',
+      );
+    }
+
+    final sourceContent = sourceArchiveFile.content as List<int>;
+    final actualSourceHash = sha256.convert(sourceContent).toString();
+    if (actualSourceHash != manifest.sourceImageHash) {
+      throw ChecksumMismatchFailure(manifest.sourceImageHash, actualSourceHash);
+    }
+
+    // 8. Recipe existence check before sandbox allocation
+    final recipeEntry = archive.findFile('recipe.json');
+    if (recipeEntry == null) {
+      throw const FormatFailure('Package corrupted: missing "recipe.json"');
+    }
+
+    // 9. Resolve Duplicate Project Name to prevent SQLite unique constraint violation (DEF-022)
     String resolvedName = manifest.projectName;
     if (database.projectNameExists(resolvedName)) {
       resolvedName = '${manifest.projectName} (Imported)';
@@ -166,7 +323,7 @@ class ProjectPackageImporter {
       }
     }
 
-    // 7. Atomic Sandbox Extraction with Failure Cleanup
+    // 10. Atomic Sandbox Extraction with Failure Cleanup
     final hashPrefix = manifest.sourceImageHash.length >= 6
         ? manifest.sourceImageHash.substring(0, 6)
         : manifest.sourceImageHash;
@@ -176,33 +333,6 @@ class ProjectPackageImporter {
     fileStorage.ensureProjectDirectories(newProjectId);
 
     try {
-      // Extract source media: must match declared source in manifest files
-      final sourceEntries = manifest.files.keys
-          .where((k) => k.startsWith('source/'))
-          .toList();
-      if (sourceEntries.isEmpty) {
-        throw const FormatFailure(
-          'Package corrupted: No source image declared in manifest under source/ folder.',
-        );
-      }
-
-      final sourceRelativePath = sourceEntries.first;
-      final sourceArchiveFile = archive.findFile(sourceRelativePath);
-      if (sourceArchiveFile == null) {
-        throw FormatFailure(
-          'Package corrupted: Declared source image "$sourceRelativePath" not found in archive.',
-        );
-      }
-
-      final sourceContent = sourceArchiveFile.content as List<int>;
-      final actualSourceHash = sha256.convert(sourceContent).toString();
-      if (actualSourceHash != manifest.sourceImageHash) {
-        throw ChecksumMismatchFailure(
-          manifest.sourceImageHash,
-          actualSourceHash,
-        );
-      }
-
       final sourceFileName = p.basename(sourceArchiveFile.name);
       final extractedSourceFile = File(
         p.join(
@@ -236,7 +366,6 @@ class ProjectPackageImporter {
       ) as Map<String, dynamic>;
       final rawRecipe = RenderRecipe.fromJson(recipeJson);
 
-      // Update recipe to point to the newly extracted source image path
       final adaptedRecipe = RenderRecipe(
         recipeId: 'recipe_$newProjectId',
         recipeVersion: rawRecipe.recipeVersion,
@@ -254,6 +383,8 @@ class ProjectPackageImporter {
                 p.basename(rawRecipe.maskPath!),
               )
             : null,
+        layerStack: rawRecipe.layerStack,
+        variantBoard: rawRecipe.variantBoard,
         updatedAt: DateTime.now().toUtc(),
       );
 

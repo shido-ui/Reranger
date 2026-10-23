@@ -67,77 +67,45 @@ void main() {
       }
     });
 
-    testWidgets('Stealth Studio tab: warning label, controls, and preview', (
-      tester,
-    ) async {
-      tester.view.physicalSize = const Size(800, 1200);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(() => tester.view.resetPhysicalSize());
+    testWidgets(
+      'Stealth Studio is absent: honest Pro Tools tabs without evasion tools',
+      (tester) async {
+        tester.view.physicalSize = const Size(800, 1200);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(() => tester.view.resetPhysicalSize());
 
-      final controller = EditorController(
-        projectRepository: repository,
-        fileStorage: fileStorage,
-      );
+        final controller = EditorController(
+          projectRepository: repository,
+          fileStorage: fileStorage,
+        );
 
-      await tester.runAsync(() async {
-        await controller.loadProject(project.id);
-      });
-      controller.previewPngBytes = sampleImageFile.readAsBytesSync();
+        await tester.runAsync(() async {
+          await controller.loadProject(project.id);
+        });
+        controller.previewPngBytes = sampleImageFile.readAsBytesSync();
 
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: AppTheme.darkTheme,
-          home: EditorScreen(projectId: project.id, controller: controller),
-        ),
-      );
-      await tester.pump();
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: AppTheme.darkTheme,
+            home: EditorScreen(projectId: project.id, controller: controller),
+          ),
+        );
+        await tester.pump();
 
-      // Open Pro Tools
-      await tester.tap(find.byTooltip('Open Pro Tools Studio'));
-      await settleSheet(tester);
+        // Open Pro Tools
+        await tester.tap(find.byTooltip('Open Pro Tools Studio'));
+        await settleSheet(tester);
 
-      // Scroll TabBar to reveal Stealth Studio tab
-      await tester.drag(find.byType(TabBar), const Offset(-400, 0));
-      await settleSheet(tester);
+        // Verify Stealth Studio tab is NOT present (Invariant 7 & Prompt 5 honest removal)
+        expect(find.text('Stealth Studio'), findsNothing);
+        expect(find.text('Enable Adversarial Stealth'), findsNothing);
 
-      // Navigate to Stealth Studio tab
-      await tester.tap(find.text('Stealth Studio'));
-      await settleSheet(tester);
-
-      // Verify mandatory warning label
-      expect(
-        find.textContaining(
-          'This applies adversarial noise optimized to disrupt AI detection algorithms',
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.textContaining('It does not guarantee human authorship.'),
-        findsOneWidget,
-      );
-
-      // Verify controls
-      expect(find.text('Enable Adversarial Stealth'), findsOneWidget);
-      expect(find.text('Adversarial Strength'), findsOneWidget);
-      expect(find.text('Apply Frequency Perturbation'), findsOneWidget);
-      expect(find.text('Preview Noise Impact'), findsOneWidget);
-
-      // Toggle enable stealth
-      await tester.tap(find.text('Enable Adversarial Stealth'));
-      await settleSheet(tester);
-      expect(controller.isStealthEnabled, isTrue);
-
-      // Verify graph builds with AdversarialStealthNode when enabled
-      final stealthGraph = controller.buildActiveGraph();
-      expect(stealthGraph.nodes.containsKey('stealth_output_node'), isTrue);
-      expect(stealthGraph.outputNodeId, equals('stealth_output_node'));
-
-      // Toggle preview
-      await tester.tap(find.text('Preview Noise Impact'));
-      await settleSheet(tester);
-      expect(controller.isPreviewingStealth, isTrue);
-      expect(find.text('Stop Preview'), findsOneWidget);
-    });
+        // Verify honest tabs are present
+        expect(find.text('Layers'), findsOneWidget);
+        expect(find.text('History'), findsOneWidget);
+        expect(find.text('Output'), findsOneWidget);
+      },
+    );
 
     testWidgets(
       'Diagnostics Lab tab: folder & adapter selectors, benchmark run, and dashboard',
@@ -199,7 +167,10 @@ void main() {
 
         // Verify C2PA provenance section
         expect(find.text('C2PA Provenance Signals'), findsOneWidget);
-        expect(find.text('Valid C2PA Signatures'), findsOneWidget);
+        expect(
+          find.text('C2PA Container Markers (Unverified)'),
+          findsOneWidget,
+        );
         expect(find.text('2'), findsOneWidget);
         expect(find.text('Missing Provenance'), findsOneWidget);
         expect(find.text('8'), findsOneWidget);

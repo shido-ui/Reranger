@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'render_graph_node.dart';
 import 'render_pipeline_failure.dart';
 
@@ -114,6 +116,26 @@ class RecolorNode extends RenderGraphNode {
         actualValue: strength,
         expectedCriteria: 'Strength must be in [0.0, 1.0]',
       );
+    }
+    if (maskBase64 != null) {
+      if (maskBase64!.isEmpty) {
+        throw RenderInvalidParametersFailure(
+          nodeId: id,
+          parameterName: 'maskBase64',
+          actualValue: maskBase64,
+          expectedCriteria: 'Non-empty base64-encoded mask string',
+        );
+      }
+      try {
+        base64.decode(maskBase64!);
+      } catch (_) {
+        throw RenderInvalidParametersFailure(
+          nodeId: id,
+          parameterName: 'maskBase64',
+          actualValue: 'corrupt_base64_data',
+          expectedCriteria: 'Valid base64-encoded binary mask string',
+        );
+      }
     }
   }
 

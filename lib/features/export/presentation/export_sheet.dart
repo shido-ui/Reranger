@@ -50,6 +50,20 @@ class _ExportSheetState extends State<ExportSheet> {
   String? _errorMessage;
 
   @override
+  void initState() {
+    super.initState();
+    _scale = widget.controller.renderScale;
+    final fmt = widget.controller.exportFormat.toUpperCase();
+    if (fmt == 'JPEG' || fmt == 'JPG') {
+      _selectedFormat = ExportImageFormat.jpeg;
+    } else if (fmt == 'WEBP') {
+      _selectedFormat = ExportImageFormat.webp;
+    } else {
+      _selectedFormat = ExportImageFormat.png;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
@@ -185,7 +199,12 @@ class _ExportSheetState extends State<ExportSheet> {
                   ],
                   selected: {_selectedFormat},
                   onSelectionChanged: (set) {
-                    setState(() => _selectedFormat = set.first);
+                    setState(() {
+                      _selectedFormat = set.first;
+                      widget.controller.setExportFormat(
+                        _selectedFormat.name.toUpperCase(),
+                      );
+                    });
                   },
                 ),
                 const SizedBox(height: AppSpacingTokens.xs),
@@ -249,7 +268,12 @@ class _ExportSheetState extends State<ExportSheet> {
                       label: const Text('50%'),
                       selected: _scale == 0.5,
                       onSelected: (val) {
-                        if (val) setState(() => _scale = 0.5);
+                        if (val) {
+                          setState(() {
+                            _scale = 0.5;
+                            widget.controller.setRenderScale(0.5);
+                          });
+                        }
                       },
                     ),
                     const SizedBox(width: AppSpacingTokens.xs),
@@ -257,7 +281,12 @@ class _ExportSheetState extends State<ExportSheet> {
                       label: const Text('100% (Full Master)'),
                       selected: _scale == 1.0,
                       onSelected: (val) {
-                        if (val) setState(() => _scale = 1.0);
+                        if (val) {
+                          setState(() {
+                            _scale = 1.0;
+                            widget.controller.setRenderScale(1.0);
+                          });
+                        }
                       },
                     ),
                     const SizedBox(width: AppSpacingTokens.xs),
@@ -265,7 +294,12 @@ class _ExportSheetState extends State<ExportSheet> {
                       label: const Text('200%'),
                       selected: _scale == 2.0,
                       onSelected: (val) {
-                        if (val) setState(() => _scale = 2.0);
+                        if (val) {
+                          setState(() {
+                            _scale = 2.0;
+                            widget.controller.setRenderScale(2.0);
+                          });
+                        }
                       },
                     ),
                   ],
@@ -329,20 +363,33 @@ class _ExportSheetState extends State<ExportSheet> {
                     borderRadius: AppRadiusTokens.borderMd,
                     border: Border.all(color: borderSubtle),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Estimated File Size',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: secondaryText,
-                        ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Estimated File Size',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: secondaryText,
+                            ),
+                          ),
+                          Text(
+                            '~$estimatedSizeStr (Estimated)',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              color: primaryText,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
                       ),
+                      const SizedBox(height: 2),
                       Text(
-                        estimatedSizeStr,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          color: primaryText,
-                          fontWeight: FontWeight.bold,
+                        'Estimated from typical entropy; exact output size varies with image complexity.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: secondaryText,
+                          fontSize: 11,
                         ),
                       ),
                     ],
@@ -468,15 +515,33 @@ class _ExportSheetState extends State<ExportSheet> {
         sourceImagePath: project.sourceImagePath,
       );
 
-      // Update project record with output reference
+      // Update project record with output reference and current active recipe (Prompt 1.B.2)
+      final currentRecipe = widget.controller.buildCurrentRecipe();
       final updatedProject = project.copyWith(
         outputReferencePath: result.filePath,
         outputChecksum: result.sha256Checksum,
+        recipe: currentRecipe,
+        isDirty: false,
         updatedAt: DateTime.now().toUtc(),
       );
-      await widget.controller.projectRepository.saveProject(updatedProject);
-      widget.controller.project = updatedProject;
-      widget.controller.isSaved = true;
+
+      // Attempt metadata persistence with partial failure safety (Prompt 1.B.3)
+      try {
+        await widget.controller.projectRepository.saveProject(updatedProject);
+        widget.controller.project = updatedProject;
+        widget.controller.isSaved = true;
+      } catch (saveError) {
+        // Partial outcome: Image export succeeded on disk, but project metadata failed to update.
+        // Retain recoverable state; do NOT clear dirty journal or claim complete success (Prompt 1.B.3).
+        if (mounted) {
+          setState(() {
+            _isExporting = false;
+            _errorMessage =
+                'Image saved to ${result.filePath}, but project metadata persistence failed: $saveError. Your edits remain preserved in the recovery journal.';
+          });
+        }
+        return;
+      }
 
       final sizeStr = RealSizeEstimator.formatBytes(result.byteLength);
       final alphaNote = result.alphaStripped ? ' (alpha composited)' : '';
@@ -489,16 +554,18 @@ class _ExportSheetState extends State<ExportSheet> {
           subject: project.name,
         );
         msg =
-            'Shared successfully! ($sizeStr, ${_selectedFormat.name.toUpperCase()}$alphaNote)';
+            'Share sheet opened ($sizeStr, ${_selectedFormat.name.toUpperCase()}$alphaNote)';
       } else {
-        await widget.mediaService.saveImageToGallery(
+        final savedLocation = await widget.mediaService.saveImageToGallery(
           filePath: result.filePath,
           title:
               '${project.name}_export_${DateTime.now().millisecondsSinceEpoch}',
           mimeType: _selectedFormat.mimeType,
         );
-        msg =
-            'Saved successfully to outputs! ($sizeStr, ${_selectedFormat.name.toUpperCase()}$alphaNote)';
+        final inGallery = savedLocation != result.filePath;
+        msg = inGallery
+            ? 'Saved successfully to outputs! Saved to device gallery ($sizeStr, ${_selectedFormat.name.toUpperCase()}$alphaNote)'
+            : 'Saved successfully to outputs! ($sizeStr, ${_selectedFormat.name.toUpperCase()}$alphaNote)';
       }
 
       if (mounted) {
@@ -540,8 +607,14 @@ class _ExportSheetState extends State<ExportSheet> {
         extension: '.rrproj',
       );
 
+      final currentRecipe = widget.controller.buildCurrentRecipe();
+      final projectToExport = project.copyWith(
+        recipe: currentRecipe,
+        updatedAt: DateTime.now().toUtc(),
+      );
+
       final result = await exporter.exportPackage(
-        project: project,
+        project: projectToExport,
         destinationPackagePath: packagePath,
       );
 

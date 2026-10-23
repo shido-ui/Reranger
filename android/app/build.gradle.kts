@@ -29,11 +29,33 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+            val keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            val keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+            val keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+
+            if (!keystorePath.isNullOrEmpty() && java.io.File(keystorePath).exists()) {
+                storeFile = java.io.File(keystorePath)
+                storePassword = keystorePassword
+                this.keyAlias = keyAlias
+                this.keyPassword = keyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+            if (!keystorePath.isNullOrEmpty() && java.io.File(keystorePath).exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                // Production releases require owner-managed signing credentials supplied through
+                // secure CI secrets or an approved local release process (Prompt 6.C.4).
+                // Do not commit keys or passwords, and do not silently fall back to debug signing.
+                signingConfig = null
+            }
         }
     }
 }

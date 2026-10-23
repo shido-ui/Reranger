@@ -9,11 +9,10 @@ import '../../../data/local/local_project_repository.dart';
 import '../../../data/local/project_file_storage.dart';
 import '../../../data/render/render_job_controller.dart';
 import '../../../domain/layers/editor_layer.dart';
+import '../../../domain/layers/history_command.dart';
 import '../../../domain/presets/preset_definition.dart';
 import '../../../domain/project/project_entity.dart';
-import '../../../domain/recipes/adversarial_stealth_node.dart';
 import '../../../domain/recipes/render_graph.dart';
-import '../../../domain/recipes/render_graph_node.dart';
 import '../../presets/data/preset_catalog.dart';
 import 'layer_history_controller.dart';
 
@@ -30,6 +29,20 @@ class EditorController extends ChangeNotifier {
   PresetDefinition? activePreset;
   Map<String, double> parameterValues = {};
   LayerHistoryController? layerHistoryController;
+  String activeStudio = 'style';
+
+  bool get canUndo => layerHistoryController?.state.canUndo ?? false;
+  bool get canRedo => layerHistoryController?.state.canRedo ?? false;
+  void undo() => layerHistoryController?.undo();
+  void redo() => layerHistoryController?.redo();
+
+  void setActiveStudio(String studio) {
+    if (activeStudio == studio) return;
+    activeStudio = studio;
+    isSaved = false;
+    notifyListeners();
+    _recordDirtyJournal();
+  }
 
   String? selectedCategory;
   double effectStrength = 1.0;
@@ -38,17 +51,12 @@ class EditorController extends ChangeNotifier {
   double renderScale = 1.0;
   String exportFormat = 'PNG';
 
-  // Adversarial Stealth Studio state (Post-Prompt 23 PO Addendum)
-  bool isStealthEnabled = false;
-  double stealthStrength = 0.5;
-  bool stealthApplyFrequency = true;
-  bool isPreviewingStealth = false;
-
   bool isComparing = false;
   bool isLoading = true;
   bool isSaving = false;
   bool isSaved = false;
   String? errorMessage;
+  String? presetMigrationNotice;
   RenderJobState renderState = const RenderJobIdle();
 
   StreamSubscription<RenderJobState>? _jobSubscription;
@@ -88,14 +96,16 @@ class EditorController extends ChangeNotifier {
         return;
       }
 
-      // Check crash dirty journal for unsaved recovery
-      final dirtyRecipe = await projectRepository.checkDirtyJournal();
+      // Check crash dirty journal for project-scoped unsaved recovery (Prompt 1.C.2)
+      final dirtyRecipe = await projectRepository.checkDirtyJournal(loaded.id);
       if (dirtyRecipe != null &&
-          dirtyRecipe.recipeId == loaded.recipe.recipeId) {
+          dirtyRecipe.recipeId == loaded.recipe.recipeId &&
+          dirtyRecipe.sourceImageHash == loaded.sourceImageHash) {
         loaded = loaded.copyWith(recipe: dirtyRecipe, isDirty: true);
       }
 
       project = loaded;
+      activeStudio = loaded.recipe.activeStudio;
       final initialLayers = loaded.recipe.layerStack?.layers.skip(1).toList();
       final initialVariantBoard = loaded.recipe.variantBoard;
 
@@ -123,9 +133,25 @@ class EditorController extends ChangeNotifier {
       }
       sourceImageBytes = await sourceFile.readAsBytes();
 
-      // Resolve active preset
+      // Resolve active preset with honest, recoverable fallback (Prompt 1.A.2 & 1.A.3)
       final presetId = loaded.recipe.activePresetId;
-      activePreset = PresetCatalog.getById(presetId) ?? PresetCatalog.all.first;
+      final resolvedPreset = PresetCatalog.getById(presetId);
+      if (resolvedPreset != null) {
+        activePreset = resolvedPreset;
+      } else {
+        // Recoverable, user-visible migration path for unrecognized preset IDs
+        activePreset = PresetCatalog.defaultPreset;
+        presetMigrationNotice =
+            'The style preset "$presetId" is no longer available and was migrated to "${activePreset!.displayName}".';
+        loaded = loaded.copyWith(
+          recipe: loaded.recipe.copyWith(
+            activePresetId: activePreset!.id,
+            updatedAt: DateTime.now().toUtc(),
+          ),
+          isDirty: true,
+        );
+        project = loaded;
+      }
 
       // Restore parameters
       if (loaded.recipe.fineTuneParameters.isNotEmpty) {
@@ -173,16 +199,39 @@ class EditorController extends ChangeNotifier {
   }
 
   /// Adjusts a slider parameter and dispatches a render with latest-request-wins semantics.
-  Future<void> updateParameter(String paramId, double value) async {
+  Future<void> updateParameter(
+    String paramId,
+    double value, {
+    bool recordHistory = true,
+  }) async {
     final param = activePreset?.parameters.firstWhere(
       (p) => p.id == paramId,
       orElse: () => activePreset!.parameters.first,
     );
     final clamped = param != null ? param.clamp(value) : value;
+    final oldValue = parameterValues[paramId] ?? (param?.defaultValue ?? 0.0);
+
+    if ((oldValue - clamped).abs() < 1e-5) return;
 
     parameterValues[paramId] = clamped;
     isSaved = false;
     notifyListeners();
+
+    if (recordHistory && layerHistoryController != null) {
+      final cmd = SetParameterCommand(
+        parameterId: paramId,
+        oldValue: oldValue,
+        newValue: clamped,
+        onApply: (id, val) {
+          parameterValues[id] = val;
+          isSaved = false;
+          notifyListeners();
+          _recordDirtyJournal();
+          _dispatchRender();
+        },
+      );
+      layerHistoryController!.executeCommand(cmd);
+    }
 
     _recordDirtyJournal();
     await _dispatchRender();
@@ -278,39 +327,6 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Toggles whether adversarial stealth perturbations are enabled.
-  Future<void> setStealthEnabled(bool enabled) async {
-    if (isStealthEnabled == enabled) return;
-    isStealthEnabled = enabled;
-    notifyListeners();
-    await _dispatchRender();
-  }
-
-  /// Sets adversarial stealth perturbation magnitude (epsilon).
-  Future<void> setStealthStrength(double val) async {
-    stealthStrength = val.clamp(0.0, 1.0);
-    notifyListeners();
-    if (isStealthEnabled || isPreviewingStealth) {
-      await _dispatchRender();
-    }
-  }
-
-  /// Toggles frequency domain perturbation mode.
-  Future<void> setStealthApplyFrequency(bool val) async {
-    stealthApplyFrequency = val;
-    notifyListeners();
-    if (isStealthEnabled || isPreviewingStealth) {
-      await _dispatchRender();
-    }
-  }
-
-  /// Toggles preview of adversarial stealth effect in viewport.
-  Future<void> toggleStealthPreview() async {
-    isPreviewingStealth = !isPreviewingStealth;
-    notifyListeners();
-    await _dispatchRender();
-  }
-
   void _onLayerStackChanged() {
     _recordDirtyJournal();
     _dispatchRender();
@@ -333,22 +349,6 @@ class EditorController extends ChangeNotifier {
       );
     }
 
-    // Strict Isolation: AdversarialStealthNode cannot be injected unless explicitly toggled
-    if (isStealthEnabled || isPreviewingStealth) {
-      final stealthNode = AdversarialStealthNode(
-        id: 'stealth_output_node',
-        inputNodeId: graph.outputNodeId,
-        strength: stealthStrength,
-        applyFrequencyPerturbation: stealthApplyFrequency,
-      );
-      final updatedNodes = Map<String, RenderGraphNode>.from(graph.nodes);
-      updatedNodes[stealthNode.id] = stealthNode;
-      graph = RenderGraph(
-        id: '${graph.id}_stealth',
-        nodes: updatedNodes,
-        outputNodeId: stealthNode.id,
-      );
-    }
     return graph;
   }
 
@@ -390,18 +390,23 @@ class EditorController extends ChangeNotifier {
     }
   }
 
-  /// Records active recipe into SQLite crash journal for force-stop recovery.
-  void _recordDirtyJournal() {
-    if (project == null || activePreset == null) return;
-    final recipe = project!.recipe.copyWith(
-      activeStudio: 'style',
+  /// Constructs the canonical [RenderRecipe] describing the exact current edit state (Prompt 1.B.2).
+  RenderRecipe buildCurrentRecipe() {
+    return project!.recipe.copyWith(
+      activeStudio: activeStudio,
       activePresetId: activePreset!.id,
-      fineTuneParameters: parameterValues,
+      fineTuneParameters: Map<String, double>.from(parameterValues),
       layerStack: layerHistoryController?.state.layerStack,
       variantBoard: layerHistoryController?.state.variantBoard,
       recipeVersion: 2,
       updatedAt: DateTime.now().toUtc(),
     );
+  }
+
+  /// Records active recipe into SQLite crash journal for force-stop recovery.
+  void _recordDirtyJournal() {
+    if (project == null || activePreset == null) return;
+    final recipe = buildCurrentRecipe();
     projectRepository.writeDirtyJournal(project!.id, recipe);
   }
 
@@ -466,15 +471,7 @@ class EditorController extends ChangeNotifier {
         sourceImagePath: project!.sourceImagePath,
       );
 
-      final updatedRecipe = project!.recipe.copyWith(
-        activeStudio: 'style',
-        activePresetId: activePreset!.id,
-        fineTuneParameters: parameterValues,
-        layerStack: layerHistoryController?.state.layerStack,
-        variantBoard: layerHistoryController?.state.variantBoard,
-        recipeVersion: 2,
-        updatedAt: DateTime.now().toUtc(),
-      );
+      final updatedRecipe = buildCurrentRecipe();
 
       final updatedProject = project!.copyWith(
         outputReferencePath: writeResult.path,

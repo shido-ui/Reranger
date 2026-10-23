@@ -42,12 +42,15 @@ void main() {
           equals(C2paStatus.manifestContainerDetectedUnverified),
         );
         expect(c2paResult.isContainerDetected, isTrue);
-        expect(c2paResult.isValid, isTrue); // backwards compatibility alias
+        expect(
+          c2paResult.isValid,
+          isFalse,
+        ); // Invariant 7: unverified marker is not valid
         expect(
           c2paResult.manifestIssuer,
           isNull,
         ); // Invariant 7: never fabricate issuer
-        expect(c2paResult.message, contains('unverified'));
+        expect(c2paResult.message, contains('not verified'));
 
         // 2. JUMBF magic tag with full header segment
         final jumbBytes = Uint8List.fromList([
@@ -113,7 +116,9 @@ void main() {
       test('C2paStatus label and messages conform to Invariant 7 non-illusory reporting', () {
         expect(
           C2paStatus.manifestContainerDetectedUnverified.label,
-          equals('C2PA Container Detected (Signature Unverified)'),
+          equals(
+            'Metadata marker present; cryptographic signature not verified',
+          ),
         );
         expect(
           C2paStatus.invalid.label,

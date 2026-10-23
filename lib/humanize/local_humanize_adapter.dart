@@ -19,6 +19,7 @@ class LocalHumanizeAdapter implements HumanizeAdapter {
 
   final int totalRamBytes;
   final String? overrideModelPath;
+  final bool isLoadedForTesting;
 
   bool _isLoaded = false;
   bool _isInferring = false;
@@ -29,7 +30,7 @@ class LocalHumanizeAdapter implements HumanizeAdapter {
   LocalHumanizeAdapter({
     this.totalRamBytes = 12 * 1024 * 1024 * 1024, // Default to 12 GB Pixel 10
     this.overrideModelPath,
-    bool isLoadedForTesting = false,
+    this.isLoadedForTesting = false,
   }) {
     if (hardwareTier == HardwareTier.unsupportedOomRisk) {
       _lifecycleState = HumanizeLifecycleState.unavailable;
@@ -75,7 +76,23 @@ class LocalHumanizeAdapter implements HumanizeAdapter {
   @override
   Future<HumanizeCapabilities> getCapabilities() async {
     final tier = hardwareTier;
-    final isSupported = tier != HardwareTier.unsupportedOomRisk;
+    final hasHardware = tier != HardwareTier.unsupportedOomRisk;
+    final hasWeights = await isModelAvailable();
+    final isSupported = hasHardware && hasWeights && _isLoaded;
+
+    final String? reason;
+    if (!hasHardware) {
+      reason =
+          'Host device total physical RAM (${totalRamBytes ~/ (1024 * 1024)} MB) '
+          'is below the minimum 6 GB threshold required for local neural inference.';
+    } else if (!hasWeights || !_isLoaded) {
+      reason =
+          'On-device neural diffusion model weights are not installed or bundled in this release. '
+          'Under Reranger Product Constitution Invariants 7 & 9, placeholder arithmetic or simulated filters '
+          'cannot be presented as neural inference. Style & Render Studio and Recolor Studio remain fully operational.';
+    } else {
+      reason = null;
+    }
 
     return HumanizeCapabilities(
       isSupported: isSupported,
@@ -93,23 +110,22 @@ class LocalHumanizeAdapter implements HumanizeAdapter {
               'deterministic_seed',
             ]
           : const [],
-      modelName: 'Stable Diffusion v1.5 (Q4_0 GGUF) + LCM LoRA',
-      modelVersion: '1.5.0-Q4_0-LCM',
-      license: 'CreativeML OpenRAIL-M / Apache-2.0',
-      sha256Checksum: canonicalBaseModelSha256,
+      modelName: isSupported
+          ? 'Stable Diffusion v1.5 (Q4_0 GGUF) + LCM LoRA'
+          : 'None Installed (Neural Weights Missing)',
+      modelVersion: isSupported ? '1.5.0-Q4_0-LCM' : 'N/A',
+      license: isSupported ? 'CreativeML OpenRAIL-M / Apache-2.0' : 'N/A',
+      sha256Checksum: isSupported ? canonicalBaseModelSha256 : 'N/A',
       estimatedMemoryBytes: tier == HardwareTier.flagshipSupported
           ? 2291130368 // ~2.185 GB peak RSS
           : 1468006400, // ~1.400 GB peak RSS
-      unavailabilityReason: isSupported
-          ? null
-          : 'Host device total physical RAM (${totalRamBytes ~/ (1024 * 1024)} MB) '
-                'is below the minimum 6 GB threshold required for local neural inference.',
+      unavailabilityReason: reason,
     );
   }
 
   @override
   Future<bool> isModelAvailable() async {
-    if (_isLoaded) return true;
+    if (isLoadedForTesting || _isLoaded) return true;
     final path = overrideModelPath ?? _loadedModelPath;
     if (path == null) return false;
     final file = File(path);
@@ -200,21 +216,24 @@ class LocalHumanizeAdapter implements HumanizeAdapter {
     CancellationToken? cancelToken,
     void Function(HumanizeProgress)? onProgress,
   }) async {
-    if (hardwareTier == HardwareTier.unsupportedOomRisk) {
-      throw HardwareTierUnsupportedException(totalRamBytes);
-    }
-
     if (_isInferring) {
       throw const ConcurrentInferenceException();
     }
+    _isInferring = true;
 
-    if (!_isLoaded) {
+    if (hardwareTier == HardwareTier.unsupportedOomRisk) {
+      _isInferring = false;
+      throw HardwareTierUnsupportedException(totalRamBytes);
+    }
+
+    final modelReady = await isModelAvailable();
+    if (!_isLoaded || !modelReady) {
+      _isInferring = false;
       throw const ModelNotLoadedException(
         'Cannot execute inference: No verified neural model is currently loaded in memory.',
       );
     }
 
-    _isInferring = true;
     _lifecycleState = HumanizeLifecycleState.running;
     final stopwatch = Stopwatch()..start();
 

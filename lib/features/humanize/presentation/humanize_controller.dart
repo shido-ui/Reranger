@@ -129,16 +129,20 @@ class HumanizeController extends ChangeNotifier {
     try {
       final caps = await _adapter.getCapabilities();
       if (!caps.isSupported) {
-        _status = HumanizeUiStatus.unsupportedHardware;
-        _unavailabilityReason =
-            caps.unavailabilityReason ??
-            'Humanize Studio requires at least 6 GB of physical device RAM.';
+        if (caps.hardwareTier == HardwareTier.unsupportedOomRisk) {
+          _status = HumanizeUiStatus.unsupportedHardware;
+        } else {
+          _status = HumanizeUiStatus.modelNotInstalled;
+        }
+        _unavailabilityReason = caps.unavailabilityReason ?? 'Humanize Studio is currently unavailable. No verified on-device neural diffusion weights are installed.';
       } else {
         final hasModel = await _adapter.isModelAvailable();
         if (!hasModel &&
             _adapter.lifecycleState != HumanizeLifecycleState.ready) {
           _status = HumanizeUiStatus.modelNotInstalled;
-          _unavailabilityReason = 'Humanize neural model weights are not installed on device. Download required on-demand.';
+          _unavailabilityReason =
+              'Humanize neural model weights are not installed on device. '
+              'In accordance with Invariants 7 & 9, placeholder arithmetic or simulated filters cannot be presented as neural inference.';
         } else {
           _status = HumanizeUiStatus.idle;
         }

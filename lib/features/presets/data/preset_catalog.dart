@@ -77,7 +77,12 @@ class PresetCatalog {
     // Backward-compatible alias lookups:
     'flat_illustration': BatchBPresets.flatVector,
     'vintage_film': BatchBPresets.vintage35mm,
+    'default_natural': BatchAPresets.graphitePencil,
   };
+
+  /// Canonical default preset for new projects and fallback migrations.
+  static PresetDefinition get defaultPreset => all.first;
+  static String get defaultPresetId => defaultPreset.id;
 
   /// Returns preset definition by unique [id], or `null` if not found.
   static PresetDefinition? getById(String id) => _byId[id];

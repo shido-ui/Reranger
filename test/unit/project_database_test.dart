@@ -14,8 +14,8 @@ void main() {
       database.dispose();
     });
 
-    test('Initializes with latest migration version (V2)', () {
-      expect(database.currentVersion, equals(2));
+    test('Initializes with latest migration version (V3)', () {
+      expect(database.currentVersion, equals(3));
     });
 
     test('Upsert and retrieve project round-trip succeeds with exact values', () {
@@ -167,6 +167,51 @@ void main() {
 
       database.clearDirtyJournal();
       expect(database.readDirtyJournal(), isNull);
+    });
+
+    test('Crash Recovery Dirty Journal project-scoped isolation', () {
+      final recipeA = RenderRecipe.initial(
+        recipeId: 'rec_a',
+        sourceImageHash: 'hash_a',
+        sourceImagePath: '/path_a.png',
+        activeStudio: 'style',
+      );
+      final recipeB = RenderRecipe.initial(
+        recipeId: 'rec_b',
+        sourceImageHash: 'hash_b',
+        sourceImagePath: '/path_b.png',
+        activeStudio: 'recolor',
+      );
+
+      database.writeDirtyJournal('proj_a', recipeA);
+      database.writeDirtyJournal('proj_b', recipeB);
+
+      // Both project entries must coexist independently without overwriting each other
+      final journalA = database.readDirtyJournal('proj_a');
+      final journalB = database.readDirtyJournal('proj_b');
+
+      expect(journalA, isNotNull);
+      expect(journalA!['projectId'], equals('proj_a'));
+      expect(
+        (journalA['recipe'] as RenderRecipe).activeStudio,
+        equals('style'),
+      );
+
+      expect(journalB, isNotNull);
+      expect(journalB!['projectId'], equals('proj_b'));
+      expect(
+        (journalB['recipe'] as RenderRecipe).activeStudio,
+        equals('recolor'),
+      );
+
+      // Clearing proj_a leaves proj_b intact
+      database.clearDirtyJournal('proj_a');
+      expect(database.readDirtyJournal('proj_a'), isNull);
+      expect(database.readDirtyJournal('proj_b'), isNotNull);
+
+      // Clearing proj_b cleans it up
+      database.clearDirtyJournal('proj_b');
+      expect(database.readDirtyJournal('proj_b'), isNull);
     });
 
     test('Scene map caching avoids redundant analysis on reopen', () {

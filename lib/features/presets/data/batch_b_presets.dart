@@ -3,6 +3,7 @@ import '../../../domain/presets/preset_parameter.dart';
 import '../../../domain/recipes/render_graph.dart';
 import '../../../domain/recipes/render_graph_node.dart';
 import '../../../domain/recipes/style_render_nodes.dart';
+import '../../../domain/recipes/artistic_render_nodes.dart';
 
 /// Batch B Presets (5 to 8):
 /// 5. Anime Cel Shade
@@ -56,15 +57,16 @@ class BatchBPresets {
             inputNodeId: 'gray_1',
             edgeThreshold: 45,
           ),
-          'ink_3': EdgeInvertSubtractNode(
-            id: 'ink_3',
-            grayInputNodeId: 'gray_1',
+          'cel_3': CelShadeColorNode(
+            id: 'cel_3',
+            colorInputNodeId: 'src_0',
             edgeInputNodeId: 'sobel_2',
-            edgeIntensity: inkStr,
+            shadeLevels: 4,
+            inkStrength: inkStr,
             contrastGamma: gamma,
           ),
         },
-        outputNodeId: 'ink_3',
+        outputNodeId: 'cel_3',
       );
     },
   );
@@ -115,16 +117,17 @@ class BatchBPresets {
             inputNodeId: 'gray_1',
             edgeThreshold: 35,
           ),
-          'ink_3': EdgeInvertSubtractNode(
-            id: 'ink_3',
-            grayInputNodeId: 'gray_1',
+          'cel_3': CelShadeColorNode(
+            id: 'cel_3',
+            colorInputNodeId: 'src_0',
             edgeInputNodeId: 'sobel_2',
-            edgeIntensity: ink,
-            contrastGamma: 1.8,
+            shadeLevels: 3,
+            inkStrength: ink,
+            contrastGamma: 1.6,
           ),
           'grain_4': GrainOverlayNode(
             id: 'grain_4',
-            inputNodeId: 'ink_3',
+            inputNodeId: 'cel_3',
             intensity: grain,
             seed: 1962,
           ),
@@ -143,7 +146,7 @@ class BatchBPresets {
     parameters: const [
       PresetParameter(
         id: 'vignette',
-        label: 'Vignette Depth',
+        label: 'Vector Edge Accent',
         min: 0.0,
         max: 0.60,
         defaultValue: 0.20,
@@ -178,28 +181,18 @@ class BatchBPresets {
           'sobel_2': SobelEdgeNode(
             id: 'sobel_2',
             inputNodeId: 'gray_1',
-            edgeThreshold: 60,
+            edgeThreshold: 55,
           ),
-          'ink_3': EdgeInvertSubtractNode(
-            id: 'ink_3',
-            grayInputNodeId: 'gray_1',
+          'cel_3': CelShadeColorNode(
+            id: 'cel_3',
+            colorInputNodeId: 'src_0',
             edgeInputNodeId: 'sobel_2',
-            edgeIntensity: 0.25,
+            shadeLevels: 4,
+            inkStrength: vig,
             contrastGamma: gamma,
           ),
-          'duo_4': DuoToneNode(
-            id: 'duo_4',
-            inputNodeId: 'ink_3',
-            shadowR: 35,
-            shadowG: 45,
-            shadowB: 70,
-            highlightR: 245,
-            highlightG: 235,
-            highlightB: 215,
-            vignetteFalloff: vig,
-          ),
         },
-        outputNodeId: 'duo_4',
+        outputNodeId: 'cel_3',
       );
     },
   );

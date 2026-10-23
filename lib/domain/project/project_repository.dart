@@ -14,11 +14,11 @@ abstract interface class ProjectRepository {
   /// Records an atomic journal snapshot for crash recovery.
   Future<void> writeDirtyJournal(String projectId, RenderRecipe recipe);
 
-  /// Checks for unsaved crash recovery state on launch.
-  Future<RenderRecipe?> checkDirtyJournal();
+  /// Checks for unsaved crash recovery state on launch (optionally scoped to [projectId]).
+  Future<RenderRecipe?> checkDirtyJournal([String? projectId]);
 
-  /// Clears the dirty journal on clean exit or save.
-  Future<void> clearDirtyJournal();
+  /// Clears the dirty journal on clean exit or save (optionally scoped to [projectId]).
+  Future<void> clearDirtyJournal([String? projectId]);
 
   /// Deletes a project from database and cleans its private files.
   Future<void> deleteProject(String projectId);

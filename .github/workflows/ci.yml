@@ -33,13 +33,28 @@ jobs:
       - name: 4. Resolve Flutter Dependencies
         run: flutter pub get
 
-      - name: 5. Execute Full Quality Pipeline & Test Suite (271 Tests)
+      - name: 5. Execute Full Quality Pipeline & Test Suite
         run: bash scripts/verify.sh
 
-      - name: 6. Compile Android Release APK (Split Per ABI)
+      - name: 6. Configure Release Signing Environment
+        run: |
+          if [ -z "${ANDROID_KEYSTORE_PATH:-}" ]; then
+            KEYSTORE_DIR="$HOME/.android"
+            mkdir -p "$KEYSTORE_DIR"
+            KEYSTORE_FILE="$KEYSTORE_DIR/release.keystore"
+            if [ ! -f "$KEYSTORE_FILE" ]; then
+              keytool -genkey -v -keystore "$KEYSTORE_FILE" -alias reranger -keyalg RSA -keysize 2048 -validity 10000 -storepass rerangerpass -keypass rerangerpass -dname "CN=Reranger, OU=Engineering, O=Reranger Studio, L=Local, S=State, C=US"
+            fi
+            echo "ANDROID_KEYSTORE_PATH=$KEYSTORE_FILE" >> $GITHUB_ENV
+            echo "ANDROID_KEYSTORE_PASSWORD=rerangerpass" >> $GITHUB_ENV
+            echo "ANDROID_KEY_ALIAS=reranger" >> $GITHUB_ENV
+            echo "ANDROID_KEY_PASSWORD=rerangerpass" >> $GITHUB_ENV
+          fi
+
+      - name: 7. Compile Android Release APK (Split Per ABI)
         run: flutter build apk --release --split-per-abi
 
-      - name: 7. Upload Release APK Artifacts
+      - name: 8. Upload Release APK Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: reranger-release-apk

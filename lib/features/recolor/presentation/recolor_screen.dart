@@ -9,6 +9,8 @@ import '../../../core/routing/route_names.dart';
 import '../../../core/theme/color_tokens.dart';
 import '../../../core/theme/spacing_tokens.dart';
 import '../../../domain/color/color_palette.dart';
+import '../../../domain/layers/editor_layer.dart';
+import '../../../domain/layers/history_command.dart';
 import '../../editor/presentation/editor_providers.dart';
 import 'recolor_controller.dart';
 
@@ -101,6 +103,47 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
         sourceImageHash: project.sourceImageHash,
         initialPalette: palette,
       );
+
+      // Restore prior recolor edits if an adjustment layer already exists
+      final existingRecolor = editorCtrl
+          .layerHistoryController
+          ?.state
+          .layerStack
+          .layers
+          .whereType<AdjustmentLayer>()
+          .where((l) => l.effectType == 'recolor')
+          .lastOrNull;
+
+      if (existingRecolor != null) {
+        final params = existingRecolor.parameters;
+        final srcR = params['sourceR'] as int?;
+        final srcG = params['sourceG'] as int?;
+        final srcB = params['sourceB'] as int?;
+        final tgtR = params['targetR'] as int?;
+        final tgtG = params['targetG'] as int?;
+        final tgtB = params['targetB'] as int?;
+        final tol = (params['tolerance'] as num?)?.toDouble() ?? 0.20;
+        final fth = (params['feather'] as num?)?.toDouble() ?? 0.10;
+
+        if (srcR != null && srcG != null && srcB != null) {
+          final colorIdx = palette.colors.indexWhere(
+            (c) =>
+                (c.r - srcR).abs() + (c.g - srcG).abs() + (c.b - srcB).abs() <
+                15,
+          );
+          if (colorIdx != -1) {
+            ctrl.selectPaletteColor(colorIdx);
+          }
+        }
+
+        if (tgtR != null && tgtG != null && tgtB != null) {
+          ctrl.setTargetColor(ColorRgb(tgtR, tgtG, tgtB));
+        }
+
+        ctrl.setStrength(existingRecolor.opacity);
+        ctrl.setTolerance(tol);
+        ctrl.setFeather(fth);
+      }
 
       if (mounted) {
         setState(() {
@@ -266,6 +309,63 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
           ),
           TextButton(
             onPressed: () {
+              final activeCtrl = _controller;
+              if (activeCtrl != null) {
+                final srcColor = activeCtrl.state.activeSourceColor;
+                final tgtColor = activeCtrl.state.targetColor;
+
+                if (srcColor != null && tgtColor != null) {
+                  final editorCtrl = ref.read(
+                    editorControllerProvider(widget.projectId),
+                  );
+                  final historyCtrl = editorCtrl.layerHistoryController;
+
+                  final existingRecolor = historyCtrl?.state.layerStack.layers
+                      .whereType<AdjustmentLayer>()
+                      .where((l) => l.effectType == 'recolor')
+                      .lastOrNull;
+
+                  final maskBase64 = activeCtrl.state.activeMask?.toBase64();
+                  final params = <String, dynamic>{
+                    'sourceR': srcColor.r,
+                    'sourceG': srcColor.g,
+                    'sourceB': srcColor.b,
+                    'targetR': tgtColor.r,
+                    'targetG': tgtColor.g,
+                    'targetB': tgtColor.b,
+                    'tolerance': activeCtrl.state.tolerance,
+                    'feather': activeCtrl.state.feather,
+                    'preserveLuminance': activeCtrl.state.preserveLuminance,
+                    'maskBase64': ?maskBase64,
+                  };
+
+                  if (existingRecolor != null && historyCtrl != null) {
+                    historyCtrl.executeCommand(
+                      UpdateAdjustmentParametersCommand(
+                        layerId: existingRecolor.id,
+                        oldParameters: existingRecolor.parameters,
+                        newParameters: params,
+                      ),
+                    );
+                    historyCtrl.setLayerOpacity(
+                      existingRecolor.id,
+                      activeCtrl.state.strength,
+                    );
+                  } else if (historyCtrl != null) {
+                    final newLayer = AdjustmentLayer(
+                      id: 'recolor_${DateTime.now().millisecondsSinceEpoch}',
+                      name:
+                          'Recolor (${srcColor.toHex()} -> ${tgtColor.toHex()})',
+                      opacity: activeCtrl.state.strength,
+                      effectType: 'recolor',
+                      parameters: params,
+                    );
+                    historyCtrl.addAdjustmentLayer(newLayer);
+                  }
+                  editorCtrl.setActiveStudio('recolor');
+                }
+              }
+
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                   content: Text(

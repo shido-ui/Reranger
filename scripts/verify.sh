@@ -28,17 +28,28 @@ python3 scripts/audit_security_licenses.py
 
 # Step 4: Native C/C++ Engine Unit Tests
 echo "[4/7] Running native C/C++ tests..."
+NATIVE_TESTS_STATUS="NOT RUN"
 if command -v ctest >/dev/null 2>&1; then
+  ran_any=0
   if [[ -d "poc/classical_engine/cpp/build" ]]; then
     echo "  -> Running classical C++ engine tests (CTest)..."
     (cd poc/classical_engine/cpp/build && ctest --output-on-failure)
+    ran_any=1
   fi
   if [[ -d "native/humanize-poc/build" ]]; then
     echo "  -> Running humanize C++ spike tests (CTest)..."
     (cd native/humanize-poc/build && ctest --output-on-failure)
+    ran_any=1
+  fi
+  if [[ $ran_any -eq 1 ]]; then
+    NATIVE_TESTS_STATUS="PASSED"
+  else
+    NATIVE_TESTS_STATUS="SKIPPED (build directories absent)"
+    echo "  Notice: Native build directories absent. Native unit tests SKIPPED."
   fi
 else
-  echo "  Notice: ctest not found on host. Native unit tests skipped on headless container."
+  NATIVE_TESTS_STATUS="SKIPPED (ctest not installed on host)"
+  echo "  Notice: ctest not found on host. Native unit tests SKIPPED on headless container."
 fi
 
 # Step 5: Unit & Widget Tests (Segmented by suite to prevent PRoot heap accumulation & OOM Signal 9)
@@ -99,5 +110,11 @@ else
 fi
 
 echo "=========================================================="
-echo "ALL RERANGER FOUNDATION VERIFICATION CHECKS PASSED (100%)"
+echo "RERANGER VERIFICATION SUMMARY"
+echo "  - Formatting: PASSED"
+echo "  - Static Analysis: PASSED"
+echo "  - Security & Licenses: PASSED"
+echo "  - Native C++ Tests: ${NATIVE_TESTS_STATUS}"
+echo "  - Flutter Unit & Widget Tests: PASSED"
+echo "  - Whitespace & Diff Check: PASSED"
 echo "=========================================================="

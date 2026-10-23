@@ -1,0 +1,12 @@
+# Dart & Flutter
+.dart_tool/
+.packages
+build/
+
+# CMake build outputs
+cpp/build/
+*.a
+*.o
+*.so
+test_classical_engine
+benchmark_native

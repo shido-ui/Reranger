@@ -7,6 +7,8 @@ import 'style_render_nodes.dart';
 import 'recolor_render_node.dart';
 import 'adversarial_stealth_node.dart';
 import 'pixelate_quantize_node.dart';
+import 'artistic_render_nodes.dart';
+import 'blend_composite_node.dart';
 
 /// Abstract base class for all versioned nodes in the Render Graph.
 /// Enforces:
@@ -38,12 +40,13 @@ abstract class RenderGraphNode {
   int estimateMemoryBytes(int width, int height);
 
   /// Computes a deterministic SHA-256 cache key for this node.
-  /// Changes to upstream keys, target dimensions, node version, or parameters
+  /// Changes to upstream keys, target dimensions, node version, parameters, or verified source hash
   /// will strictly yield a new cache key (Cache Miss).
   String computeNodeCacheKey(
     List<String> upstreamCacheKeys, {
     required int targetWidth,
     required int targetHeight,
+    String? verifiedSourceHash,
   }) {
     final buffer = StringBuffer();
     buffer.write('type:$type|');
@@ -56,6 +59,10 @@ abstract class RenderGraphNode {
       buffer.write('$upKey;');
     }
     buffer.write(']|');
+
+    if (this is SourceImageNode && verifiedSourceHash != null) {
+      buffer.write('verifiedHash:$verifiedSourceHash|');
+    }
 
     // Canonical sorted parameters
     final sortedParamKeys = parameters.keys.toList()..sort();
@@ -103,6 +110,20 @@ abstract class RenderGraphNode {
         return AdversarialStealthNode.fromJson(json);
       case PixelateQuantizeNode.nodeType:
         return PixelateQuantizeNode.fromJson(json);
+      case HalftoneNode.nodeType:
+        return HalftoneNode.fromJson(json);
+      case CrosshatchNode.nodeType:
+        return CrosshatchNode.fromJson(json);
+      case StippleNode.nodeType:
+        return StippleNode.fromJson(json);
+      case CelShadeColorNode.nodeType:
+        return CelShadeColorNode.fromJson(json);
+      case WatercolorWashNode.nodeType:
+        return WatercolorWashNode.fromJson(json);
+      case PolygonalFacetNode.nodeType:
+        return PolygonalFacetNode.fromJson(json);
+      case BlendCompositeNode.nodeType:
+        return BlendCompositeNode.fromJson(json);
       default:
         throw RenderInvalidParametersFailure(
           nodeId: json['id'] as String? ?? 'unknown',
