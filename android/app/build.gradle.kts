@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -36,8 +38,8 @@ android {
             val keyAlias = System.getenv("ANDROID_KEY_ALIAS")
             val keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
 
-            if (!keystorePath.isNullOrEmpty() && java.io.File(keystorePath).exists()) {
-                storeFile = java.io.File(keystorePath)
+            if (!keystorePath.isNullOrEmpty() && File(keystorePath).exists()) {
+                storeFile = File(keystorePath)
                 storePassword = keystorePassword
                 this.keyAlias = keyAlias
                 this.keyPassword = keyPassword
@@ -48,7 +50,7 @@ android {
     buildTypes {
         release {
             val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
-            if (!keystorePath.isNullOrEmpty() && java.io.File(keystorePath).exists()) {
+            if (!keystorePath.isNullOrEmpty() && File(keystorePath).exists()) {
                 signingConfig = signingConfigs.getByName("release")
             } else {
                 // Production releases require owner-managed signing credentials supplied through
