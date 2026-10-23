@@ -390,6 +390,7 @@ class RenderJobController {
       }
       return result;
     } on RenderGraphCancelledFailure {
+      _staleResultsDiscarded++;
       _safeEmit(RenderJobCancelled(assignedRequestId));
       return null;
     } catch (e, st) {
