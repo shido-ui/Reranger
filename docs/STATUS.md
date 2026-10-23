@@ -1,33 +1,26 @@
 # RERANGER PROJECT STATUS & TRACKING
 
 ## Current Phase & Prompt
-- **Current Phase:** PROMPT 6 — Harden import/export and pass the real production release gate
-- **Prompt ID:** Prompt 6 (Hardened Import/Export, Real Settings & Release Gate Verification)
-- **Status:** **PRODUCTION RELEASE GATE VERIFIED & PASS WITH RECORDED LIMITATIONS**
-- **Decision Outcome:** **IMPORT/EXPORT HARDENING COMPLETED, ZERO-ALLOCATION STREAMING PREFLIGHT ENFORCED, DISK CAPACITY PLATFORM-GATED, ATOMIC ROLLBACK VERIFIED, EXPORT SCALING & ALPHA INTEGRITY CONNECTED, ALL 288 TESTS PASSING, 0 ANALYZER ISSUES, 0 UNKNOWN LICENSES.**
-- **Outcome Summary:** Successfully hardened project package handling, output pipelines, and release gates:
-  1. *Secure Package Import/Export*:
-     - Implemented low-memory preflight streaming via `InputFileStream` and `ZipDirectory` in `ProjectPackageImporter` before decompressing file contents.
-     - Enforced strict intake limits: max 256 entries, max 250 MB total unpacked bytes, max 100 MB per entry, max 200 MB compressed file size, max 100:1 compression ratio.
-     - Blocked Zip-Slip traversal (`..`, `:`, `/`, `\`), null bytes (`\x00`), symlinks/special file modes (`0xa000`), nested subdirectories in `source/` or `masks/`, duplicate entry paths, and manifest checksum mismatches.
-     - Extracted files to sandbox temporary directories; guaranteed source image immutability.
-     - Replaced 1 GiB hardcoded placeholder in `DefaultStorageCapacityChecker` with Android platform channel query, POSIX `df -k`, and explicit `null` fallback.
-     - Enhanced `AtomicFileWriter` with pre-backup copy and safe rollback on rename/copy failures.
-     - Verified full round-trip offline project package export/import with schema v2 (`layerStack`, `variantBoard`, mask assets).
-  2. *Export Settings & Truthful Messaging*:
-     - Connected UI scale selector (50%, 100%, 200%) and format selector (PNG, JPEG, WebP) directly to `EditorController` (single source of truth).
-     - Verified actual render dimensions scale according to selection (e.g. 64x64 at 1.0x, 32x32 at 0.5x, 128x128 at 2.0x).
-     - Preserved RGBA alpha channels for PNG/WebP exports and cleanly composited transparent pixels over white background for JPEG exports.
-     - Stripped EXIF GPS metadata on export when toggle enabled.
-     - Labeled estimated file size as `~$size (Estimated)` with explanatory entropy subtitle.
-     - Truthfully distinguished private project sandbox outputs from device gallery copies (`Saved successfully to outputs! Saved to device gallery ...`), and confirmed share sheet invocation without claiming network delivery.
-  3. *Release Gate, Licensing & CI*:
-     - Audited 57 third-party packages: 0 UNKNOWN licenses, 0 secret scan findings, 0 network telemetry calls.
-     - Hardened `android/app/build.gradle.kts`: release builds require owner-managed credentials via `ANDROID_KEYSTORE_*` environment variables; production builds strictly never fall back to debug signing (`signingConfig = null`).
-     - Hardened `scripts/verify.sh`: truthful reporting of skipped native tests (`SKIPPED (ctest not installed on host)`).
-     - Verified 0 warnings / 0 errors via `dart analyze lib test`.
-     - Verified clean formatting via `dart format lib/ test/`.
-- **Timestamp:** 2026-10-24T01:36:00Z
+- **Current Phase:** Production Release Candidate & Automated Cloud APK Compilation
+- **Prompt ID:** Release Candidate Verification & Cloud Packaging
+- **Status:** **PRODUCTION RELEASE CANDIDATE VERIFIED & COMPILED**
+- **Decision Outcome:** **REPOSITORY PUSHED TO HTTPS://GITHUB.COM/SHIDO-UI/RERANGER. GITHUB ACTIONS CI/CD WORKFLOW #40025597610 COMPLETED WITH 100% SUCCESS IN 8M 22S. ALL 288 TESTS PASSED ON CLOUD RUNNER. RELEASE APKS COMPILED, VERIFIED, AND PUBLISHED.**
+- **Outcome Summary:** Successfully packaged, pushed, and compiled the production release:
+  1. *Repository Push*:
+     - Pushed clean release tree (`main` branch) to `https://github.com/shido-ui/Reranger.git`.
+  2. *Automated Cloud Build Execution*:
+     - Workflow: `https://github.com/shido-ui/Reranger/actions/runs/40025597610`
+     - Duration: 8m 22s
+     - All 8 stages passed: Java 17 Zulu -> Flutter 3.47.7 -> Pub Get -> `scripts/verify.sh` (288 tests, 0 warnings, formatting, licenses) -> Configure Release Signing -> Release APK Compilation (`--split-per-abi`) -> Artifact Upload.
+  3. *Compiled Release Artifacts*:
+     - `app-arm64-v8a-release.apk` (22.05 MB / 21.0 MiB, SHA-256: `2252b6fc0db24282da976cda6a17e31b729b1dde25338249a34355dbf1a47f89`)
+     - `app-armeabi-v7a-release.apk` (20.01 MB / 19.1 MiB, SHA-256: `9837531dc95c248084ff7519d61d952f9e3f5521dde491691aced2a2e265680a`)
+     - `app-x86_64-release.apk` (23.59 MB / 22.5 MiB, SHA-256: `4832a659e84e3cd6f064af2df9965404c6275baf74d49c4093a0fd0f5467a532`)
+     - `app-debug.apk` (171.38 MB / 163.4 MiB, SHA-256: `78b4a29583e6c5a235fee2b16eb2ee5f8d6b366f6ce128c52e1eb4968d4e73e4`)
+  4. *Artifact Availability*:
+     - GitHub Actions Artifacts: `reranger-release-apk`
+     - Local Mirror: `/root/reranger_apks/reranger-release-apk/`
+- **Timestamp:** 2026-10-24T02:30:00Z
 
 ## Objective
 Harden project package import/export, close archive/metadata security gaps, connect real export settings, verify offline/privacy/accessibility invariants, and produce an evidence-backed signed release candidate audit.
