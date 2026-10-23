@@ -97,18 +97,40 @@ class AtomicFileWriter {
       // 4. Checksum computation
       final digest = sha256.convert(bytes).toString();
 
-      // 5. Atomic Rename (POSIX atomic filesystem entry swap)
-      if (Platform.isWindows && targetFile.existsSync()) {
-        targetFile.deleteSync();
+      // 5. Atomic Rename / Safe Replace with Backup Rollback (DEF-024)
+      File? backupFile;
+      if (targetFile.existsSync()) {
+        final backupPath = '$destinationPath.bak.$pid.$timestamp';
+        try {
+          backupFile = targetFile.renameSync(backupPath);
+        } catch (_) {
+          // Fallback if atomic rename across volumes or non-POSIX file system
+          try {
+            backupFile = targetFile.copySync(backupPath);
+            targetFile.deleteSync();
+          } catch (_) {
+            backupFile = null;
+          }
+        }
       }
+
       try {
         tempFile.renameSync(destinationPath);
-      } on FileSystemException {
-        // Fallback if atomic replacement across or on legacy non-POSIX filesystem fails
-        if (targetFile.existsSync()) {
-          targetFile.deleteSync();
+        // Success: clean up backup file
+        if (backupFile != null && backupFile.existsSync()) {
+          try {
+            backupFile.deleteSync();
+          } catch (_) {}
         }
-        tempFile.renameSync(destinationPath);
+      } catch (renameErr) {
+        // Rollback: restore original file from backup so user data is never lost
+        if (backupFile != null && backupFile.existsSync()) {
+          try {
+            if (targetFile.existsSync()) targetFile.deleteSync();
+            backupFile.renameSync(destinationPath);
+          } catch (_) {}
+        }
+        rethrow;
       }
 
       return AtomicWriteResult(

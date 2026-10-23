@@ -188,14 +188,13 @@ class ColorHsl {
       identical(this, other) ||
       other is ColorHsl &&
           runtimeType == other.runtimeType &&
-          (h - other.h).abs() < 1e-4 &&
-          (s - other.s).abs() < 1e-4 &&
-          (l - other.l).abs() < 1e-4 &&
+          h == other.h &&
+          s == other.s &&
+          l == other.l &&
           a == other.a;
 
   @override
-  int get hashCode =>
-      Object.hash((h * 10).round(), (s * 100).round(), (l * 100).round(), a);
+  int get hashCode => Object.hash(h, s, l, a);
 
   @override
   String toString() =>

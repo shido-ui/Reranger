@@ -188,7 +188,7 @@ void main() {
       expect(editor.activePreset?.id, equals(BatchCPresets.oilPaint.id));
       expect(
         editor.renderJobController.staleResultsDiscardedCount,
-        greaterThanOrEqualTo(0),
+        greaterThanOrEqualTo(1),
       );
       expect(editor.previewPngBytes, isNotNull);
 

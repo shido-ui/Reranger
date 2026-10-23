@@ -12,11 +12,20 @@ import '../local/project_file_storage.dart';
 import 'project_package_models.dart';
 
 /// Validates, unpacks, and registers portable Reranger project packages (.rrproj / .reranger).
-/// Enforces strict Zip-Slip protection, checksum verification, and duplicate-name resolution.
+/// Enforces strict Zip-Slip protection, archive bomb limits, checksum verification, and duplicate-name resolution (DEF-026).
 class ProjectPackageImporter {
   final ProjectDatabase database;
   final ProjectFileStorage fileStorage;
   final StorageCapacityChecker capacityChecker;
+
+  /// Maximum allowed files in a project package archive.
+  static const int maxArchiveEntryCount = 256;
+
+  /// Maximum allowed uncompressed size (250 MB).
+  static const int maxTotalUnpackedBytes = 250 * 1024 * 1024;
+
+  /// Maximum allowed compression ratio to prevent zip bombs.
+  static const double maxCompressionRatio = 100.0;
 
   const ProjectPackageImporter({
     required this.database,
@@ -25,7 +34,7 @@ class ProjectPackageImporter {
   });
 
   /// Imports and unpacks [packageFile], registering the project in local SQLite and filesystem sandbox.
-  /// Throws [SecurityFailure] on any path traversal attempt.
+  /// Throws [SecurityFailure] on any path traversal attempt or archive bomb.
   /// Throws [FormatFailure] or [ChecksumMismatchFailure] if package is corrupted.
   /// Throws [LowStorageFailure] if disk space is insufficient.
   Future<ProjectEntity> importPackage(File packageFile) async {
@@ -56,8 +65,17 @@ class ProjectPackageImporter {
       throw FormatFailure('Corrupted zip archive: $e');
     }
 
-    // 2. Strict Security: Zip-Slip / Path Traversal Protection
+    // 2. Strict Security: Archive Bomb & Zip-Slip Protection
+    if (archive.files.length > maxArchiveEntryCount) {
+      throw SecurityFailure(
+        'Security violation: Archive exceeds maximum entry count of $maxArchiveEntryCount entries.',
+      );
+    }
+
+    int totalUnpackedBytes = 0;
     for (final file in archive.files) {
+      totalUnpackedBytes += file.size;
+
       final name = file.name.replaceAll('\\', '/');
       if (name.contains('..') ||
           name.contains('\x00') ||
@@ -68,6 +86,19 @@ class ProjectPackageImporter {
           'Security violation: Potential Zip-Slip / path traversal detected in archive entry: "$name"',
         );
       }
+    }
+
+    if (totalUnpackedBytes > maxTotalUnpackedBytes) {
+      throw SecurityFailure(
+        'Security violation: Archive uncompressed size ($totalUnpackedBytes bytes) exceeds maximum allowable limit of $maxTotalUnpackedBytes bytes.',
+      );
+    }
+
+    if (packageBytes.isNotEmpty &&
+        (totalUnpackedBytes / packageBytes.length) > maxCompressionRatio) {
+      throw SecurityFailure(
+        'Security violation: Potential zip bomb detected. Compression ratio exceeds $maxCompressionRatio:1.',
+      );
     }
 
     // 3. Locate and Parse Manifest
@@ -115,10 +146,6 @@ class ProjectPackageImporter {
     }
 
     // 5. Storage Headroom Check
-    int totalUnpackedBytes = 0;
-    for (final file in archive.files) {
-      totalUnpackedBytes += file.size;
-    }
     final availableBytes = await capacityChecker.getAvailableDiskBytes(
       fileStorage.projectsDir.path,
     );
@@ -128,7 +155,7 @@ class ProjectPackageImporter {
       throw LowStorageFailure(requiredBytes, availableBytes);
     }
 
-    // 6. Resolve Duplicate Project Name to prevent SQLite unique constraint violation
+    // 6. Resolve Duplicate Project Name to prevent SQLite unique constraint violation (DEF-022)
     String resolvedName = manifest.projectName;
     if (database.projectNameExists(resolvedName)) {
       resolvedName = '${manifest.projectName} (Imported)';
@@ -139,108 +166,136 @@ class ProjectPackageImporter {
       }
     }
 
-    // 7. Sandbox Extraction
+    // 7. Atomic Sandbox Extraction with Failure Cleanup
+    final hashPrefix = manifest.sourceImageHash.length >= 6
+        ? manifest.sourceImageHash.substring(0, 6)
+        : manifest.sourceImageHash;
     final newProjectId =
-        'proj_imp_${DateTime.now().microsecondsSinceEpoch}_${manifest.sourceImageHash.substring(0, 6)}';
+        'proj_imp_${DateTime.now().microsecondsSinceEpoch}_$hashPrefix';
+
     fileStorage.ensureProjectDirectories(newProjectId);
 
-    // Extract source media
-    ArchiveFile? sourceArchiveFile;
-    for (final file in archive.files) {
-      if (file.name.startsWith('source/')) {
-        sourceArchiveFile = file;
-        break;
-      }
-    }
-    if (sourceArchiveFile == null) {
-      throw const FormatFailure(
-        'Package corrupted: No source image found in source/ folder.',
-      );
-    }
-
-    final sourceFileName = p.basename(sourceArchiveFile.name);
-    final extractedSourceFile = File(
-      p.join(fileStorage.getSourceDirectory(newProjectId).path, sourceFileName),
-    );
-    await extractedSourceFile.writeAsBytes(
-      sourceArchiveFile.content as List<int>,
-      flush: true,
-    );
-
-    // Extract masks (if any)
-    for (final file in archive.files) {
-      if (file.name.startsWith('masks/') && !file.name.endsWith('/')) {
-        final maskFileName = p.basename(file.name);
-        final maskDest = File(
-          p.join(
-            fileStorage.getMasksDirectory(newProjectId).path,
-            maskFileName,
-          ),
+    try {
+      // Extract source media: must match declared source in manifest files
+      final sourceEntries = manifest.files.keys
+          .where((k) => k.startsWith('source/'))
+          .toList();
+      if (sourceEntries.isEmpty) {
+        throw const FormatFailure(
+          'Package corrupted: No source image declared in manifest under source/ folder.',
         );
-        await maskDest.writeAsBytes(file.content as List<int>, flush: true);
       }
-    }
 
-    // Parse and adapt Recipe
-    final recipeEntry = archive.findFile('recipe.json');
-    if (recipeEntry == null) {
-      throw const FormatFailure('Package corrupted: missing "recipe.json"');
-    }
-    final recipeJson = jsonDecode(
-      utf8.decode(recipeEntry.content as List<int>),
-    ) as Map<String, dynamic>;
-    final rawRecipe = RenderRecipe.fromJson(recipeJson);
+      final sourceRelativePath = sourceEntries.first;
+      final sourceArchiveFile = archive.findFile(sourceRelativePath);
+      if (sourceArchiveFile == null) {
+        throw FormatFailure(
+          'Package corrupted: Declared source image "$sourceRelativePath" not found in archive.',
+        );
+      }
 
-    // Update recipe to point to the newly extracted source image path
-    final adaptedRecipe = RenderRecipe(
-      recipeId: 'recipe_$newProjectId',
-      recipeVersion: rawRecipe.recipeVersion,
-      sourceImageHash: manifest.sourceImageHash,
-      sourceImagePath: extractedSourceFile.path,
-      activeStudio: rawRecipe.activeStudio,
-      activePresetId: rawRecipe.activePresetId,
-      masterIntensity: rawRecipe.masterIntensity,
-      fineTuneParameters: rawRecipe.fineTuneParameters,
-      curveLut256: rawRecipe.curveLut256,
-      paletteRemap: rawRecipe.paletteRemap,
-      maskPath: rawRecipe.maskPath != null
-          ? p.join(
+      final sourceContent = sourceArchiveFile.content as List<int>;
+      final actualSourceHash = sha256.convert(sourceContent).toString();
+      if (actualSourceHash != manifest.sourceImageHash) {
+        throw ChecksumMismatchFailure(
+          manifest.sourceImageHash,
+          actualSourceHash,
+        );
+      }
+
+      final sourceFileName = p.basename(sourceArchiveFile.name);
+      final extractedSourceFile = File(
+        p.join(
+          fileStorage.getSourceDirectory(newProjectId).path,
+          sourceFileName,
+        ),
+      );
+      await extractedSourceFile.writeAsBytes(sourceContent, flush: true);
+
+      // Extract masks (if any)
+      for (final file in archive.files) {
+        if (file.name.startsWith('masks/') && !file.name.endsWith('/')) {
+          final maskFileName = p.basename(file.name);
+          final maskDest = File(
+            p.join(
               fileStorage.getMasksDirectory(newProjectId).path,
-              p.basename(rawRecipe.maskPath!),
-            )
-          : null,
-      updatedAt: DateTime.now().toUtc(),
-    );
+              maskFileName,
+            ),
+          );
+          await maskDest.writeAsBytes(file.content as List<int>, flush: true);
+        }
+      }
 
-    // Parse Project Metadata
-    final projectEntry = archive.findFile('project.json');
-    int width = 0;
-    int height = 0;
-    if (projectEntry != null) {
+      // Parse and adapt Recipe
+      final recipeEntry = archive.findFile('recipe.json');
+      if (recipeEntry == null) {
+        throw const FormatFailure('Package corrupted: missing "recipe.json"');
+      }
+      final recipeJson = jsonDecode(
+        utf8.decode(recipeEntry.content as List<int>),
+      ) as Map<String, dynamic>;
+      final rawRecipe = RenderRecipe.fromJson(recipeJson);
+
+      // Update recipe to point to the newly extracted source image path
+      final adaptedRecipe = RenderRecipe(
+        recipeId: 'recipe_$newProjectId',
+        recipeVersion: rawRecipe.recipeVersion,
+        sourceImageHash: manifest.sourceImageHash,
+        sourceImagePath: extractedSourceFile.path,
+        activeStudio: rawRecipe.activeStudio,
+        activePresetId: rawRecipe.activePresetId,
+        masterIntensity: rawRecipe.masterIntensity,
+        fineTuneParameters: rawRecipe.fineTuneParameters,
+        curveLut256: rawRecipe.curveLut256,
+        paletteRemap: rawRecipe.paletteRemap,
+        maskPath: rawRecipe.maskPath != null
+            ? p.join(
+                fileStorage.getMasksDirectory(newProjectId).path,
+                p.basename(rawRecipe.maskPath!),
+              )
+            : null,
+        updatedAt: DateTime.now().toUtc(),
+      );
+
+      // Parse Project Metadata
+      final projectEntry = archive.findFile('project.json');
+      int width = 0;
+      int height = 0;
+      if (projectEntry != null) {
+        try {
+          final projectMeta = jsonDecode(
+            utf8.decode(projectEntry.content as List<int>),
+          ) as Map<String, dynamic>;
+          width = (projectMeta['sourceWidth'] as num?)?.toInt() ?? 0;
+          height = (projectMeta['sourceHeight'] as num?)?.toInt() ?? 0;
+        } catch (_) {}
+      }
+
+      final importedProject = ProjectEntity(
+        id: newProjectId,
+        name: resolvedName,
+        sourceImagePath: extractedSourceFile.path,
+        sourceImageHash: manifest.sourceImageHash,
+        sourceWidth: width > 0 ? width : 100,
+        sourceHeight: height > 0 ? height : 100,
+        createdAt: DateTime.now().toUtc(),
+        updatedAt: DateTime.now().toUtc(),
+        recipe: adaptedRecipe,
+        isDirty: false,
+        isCorrupted: false,
+      );
+
+      database.upsertProject(importedProject);
+      return importedProject;
+    } catch (e) {
+      // Clean up newly created project directory on extraction failure
       try {
-        final projectMeta = jsonDecode(
-          utf8.decode(projectEntry.content as List<int>),
-        ) as Map<String, dynamic>;
-        width = (projectMeta['sourceWidth'] as num?)?.toInt() ?? 0;
-        height = (projectMeta['sourceHeight'] as num?)?.toInt() ?? 0;
+        final dir = fileStorage.getProjectDirectory(newProjectId);
+        if (dir.existsSync()) {
+          dir.deleteSync(recursive: true);
+        }
       } catch (_) {}
+      rethrow;
     }
-
-    final importedProject = ProjectEntity(
-      id: newProjectId,
-      name: resolvedName,
-      sourceImagePath: extractedSourceFile.path,
-      sourceImageHash: manifest.sourceImageHash,
-      sourceWidth: width > 0 ? width : 100,
-      sourceHeight: height > 0 ? height : 100,
-      createdAt: DateTime.now().toUtc(),
-      updatedAt: DateTime.now().toUtc(),
-      recipe: adaptedRecipe,
-      isDirty: false,
-      isCorrupted: false,
-    );
-
-    database.upsertProject(importedProject);
-    return importedProject;
   }
 }

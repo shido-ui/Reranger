@@ -22,4 +22,7 @@ abstract interface class ProjectRepository {
 
   /// Deletes a project from database and cleans its private files.
   Future<void> deleteProject(String projectId);
+
+  /// Resolves a non-colliding unique project name (DEF-022).
+  String resolveUniqueProjectName(String baseName);
 }

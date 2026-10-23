@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../data/local/app_storage_locator.dart';
 import '../../../data/local/local_project_repository.dart';
 import '../../../data/local/project_database.dart';
 import '../../../data/local/project_file_storage.dart';
@@ -9,13 +10,9 @@ import '../../../data/platform/platform_photo_picker_service.dart';
 import '../../../domain/import/image_picker_service.dart';
 import 'import_controller.dart';
 
-/// Provider for app-private sandbox directory.
+/// Provider for app-private durable storage directory (DEF-021).
 final appSandboxDirectoryProvider = Provider<Directory>((ref) {
-  final baseDir = Directory('${Directory.systemTemp.path}/reranger_sandbox');
-  if (!baseDir.existsSync()) {
-    baseDir.createSync(recursive: true);
-  }
-  return baseDir;
+  return AppStorageLocator.instance.getDurableDirectorySync();
 });
 
 /// Provider for local SQLite project database.

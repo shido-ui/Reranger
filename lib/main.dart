@@ -5,9 +5,17 @@ import 'core/errors/error_boundary.dart';
 import 'core/logging/app_logger.dart';
 import 'core/routing/app_router.dart';
 import 'core/theme/app_theme.dart';
+import 'data/local/app_storage_locator.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize durable storage and perform safe legacy migration (DEF-021)
+  try {
+    await AppStorageLocator.initialize();
+  } catch (e, stack) {
+    AppLogger.error('Failed initializing durable app storage', e, stack);
+  }
 
   // Custom global error boundary catching layout and rendering errors
   ErrorWidget.builder = (FlutterErrorDetails details) {

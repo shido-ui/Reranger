@@ -1,10 +1,10 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:image/image.dart' as img;
 
 import '../../../core/theme/color_tokens.dart';
 import '../../../core/theme/spacing_tokens.dart';
+import '../../../data/platform/platform_media_service.dart';
 import '../../../data/project_package/project_package_exporter.dart';
 import '../../editor/presentation/editor_controller.dart';
 import '../data/image_exporter.dart';
@@ -13,18 +13,26 @@ import '../domain/export_format.dart';
 /// SCR-09: Modal sheet for configuring and finalizing verified local exports.
 class ExportSheet extends StatefulWidget {
   final EditorController controller;
+  final PlatformMediaService mediaService;
 
-  const ExportSheet({super.key, required this.controller});
+  const ExportSheet({
+    super.key,
+    required this.controller,
+    this.mediaService = const MethodChannelPlatformMediaService(),
+  });
 
   static Future<void> show(
     BuildContext context, {
     required EditorController controller,
+    PlatformMediaService mediaService =
+        const MethodChannelPlatformMediaService(),
   }) {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => ExportSheet(controller: controller),
+      builder: (ctx) =>
+          ExportSheet(controller: controller, mediaService: mediaService),
     );
   }
 
@@ -417,10 +425,9 @@ class _ExportSheetState extends State<ExportSheet> {
   }
 
   Future<void> _executeExport({required bool share}) async {
-    final previewBytes = widget.controller.previewPngBytes;
     final project = widget.controller.project;
-    if (previewBytes == null || project == null) {
-      setState(() => _errorMessage = 'No rendered image available to export.');
+    if (project == null) {
+      setState(() => _errorMessage = 'No active project available to export.');
       return;
     }
 
@@ -431,15 +438,15 @@ class _ExportSheetState extends State<ExportSheet> {
     });
 
     try {
-      final decodedImage = img.decodeImage(previewBytes);
-      if (decodedImage == null) {
-        throw const FormatException('Failed to decode active preview buffer');
-      }
+      // 1. Render at full source resolution without preview downscaling (DEF-025)
+      final fullResImage = await widget.controller.renderFullResolutionOutput(
+        scale: _scale,
+      );
 
       final config = ExportConfiguration(
         format: _selectedFormat,
         quality: _quality,
-        scale: _scale,
+        scale: 1.0, // Scale already applied by renderFullResolutionOutput
         stripGpsMetadata: _stripGps,
       );
 
@@ -455,7 +462,7 @@ class _ExportSheetState extends State<ExportSheet> {
       );
 
       final result = await exporter.exportToFile(
-        sourceImage: decodedImage,
+        sourceImage: fullResImage,
         destinationPath: resolvedPath,
         config: config,
         sourceImagePath: project.sourceImagePath,
@@ -473,9 +480,26 @@ class _ExportSheetState extends State<ExportSheet> {
 
       final sizeStr = RealSizeEstimator.formatBytes(result.byteLength);
       final alphaNote = result.alphaStripped ? ' (alpha composited)' : '';
-      final msg = share
-          ? 'Shared successfully! ($sizeStr, ${_selectedFormat.name.toUpperCase()}$alphaNote)'
-          : 'Saved successfully to outputs! ($sizeStr, ${_selectedFormat.name.toUpperCase()}$alphaNote)';
+
+      String msg;
+      if (share) {
+        await widget.mediaService.shareImage(
+          filePath: result.filePath,
+          mimeType: _selectedFormat.mimeType,
+          subject: project.name,
+        );
+        msg =
+            'Shared successfully! ($sizeStr, ${_selectedFormat.name.toUpperCase()}$alphaNote)';
+      } else {
+        await widget.mediaService.saveImageToGallery(
+          filePath: result.filePath,
+          title:
+              '${project.name}_export_${DateTime.now().millisecondsSinceEpoch}',
+          mimeType: _selectedFormat.mimeType,
+        );
+        msg =
+            'Saved successfully to outputs! ($sizeStr, ${_selectedFormat.name.toUpperCase()}$alphaNote)';
+      }
 
       if (mounted) {
         setState(() {

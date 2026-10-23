@@ -111,6 +111,8 @@ class ImportController extends ChangeNotifier {
 
   bool _isCancelled = false;
   bool _isExecuting = false;
+  bool _isDisposed = false;
+  int _activeJobToken = 0;
 
   /// Guard to prevent concurrent executions / double taps
   bool get isExecuting => _isExecuting;
@@ -128,12 +130,22 @@ class ImportController extends ChangeNotifier {
   }) : _state = initialState;
 
   void _setState(ImportState newState) {
+    if (_isDisposed) return;
     _state = newState;
     notifyListeners();
   }
 
-  /// Cancels any active import and cleans up transient sandbox files.
+  @override
+  void dispose() {
+    if (_isDisposed) return;
+    _isDisposed = true;
+    _activeJobToken++;
+    super.dispose();
+  }
+
+  /// Cancels any active import and cleans up transient sandbox files (DEF-023).
   void cancel() {
+    _activeJobToken++;
     _isCancelled = true;
     _isExecuting = false;
     _setState(const ImportCancelled());
@@ -141,6 +153,7 @@ class ImportController extends ChangeNotifier {
 
   /// Resets the controller back to initial state for a fresh intake session.
   void reset() {
+    _activeJobToken++;
     _isCancelled = false;
     _isExecuting = false;
     _lastSourcePath = null;
@@ -169,12 +182,15 @@ class ImportController extends ChangeNotifier {
       return;
     }
 
+    final token = ++_activeJobToken;
     _isExecuting = true;
     _isCancelled = false;
     _setState(const ImportPicking());
 
     try {
       final pickResult = await pickerService!.pickImage();
+      if (token != _activeJobToken || _isDisposed) return;
+
       switch (pickResult) {
         case ImagePickSuccess(:final path):
           _isExecuting = false; // reset before calling importFromPath
@@ -199,6 +215,7 @@ class ImportController extends ChangeNotifier {
           return;
       }
     } catch (e) {
+      if (token != _activeJobToken || _isDisposed) return;
       _isExecuting = false;
       _setState(
         ImportFailureState(
@@ -213,6 +230,7 @@ class ImportController extends ChangeNotifier {
   Future<void> importFromPath(String sourcePath) async {
     // 1. Concurrency Guard: Drop duplicate taps immediately
     if (_isExecuting) return;
+    final token = ++_activeJobToken;
     _isExecuting = true;
     _isCancelled = false;
     _lastSourcePath = sourcePath;
@@ -235,9 +253,11 @@ class ImportController extends ChangeNotifier {
       }
       await validator.validateFile(sourceFile);
 
-      if (_isCancelled) {
+      if (token != _activeJobToken || _isCancelled) {
         _cleanupStagedFiles(projectId);
-        _setState(const ImportCancelled());
+        if (!_isDisposed && token == _activeJobToken) {
+          _setState(const ImportCancelled());
+        }
         return;
       }
 
@@ -259,9 +279,11 @@ class ImportController extends ChangeNotifier {
       );
       stagedFilePath = stagedInfo.stagedPath;
 
-      if (_isCancelled) {
+      if (token != _activeJobToken || _isCancelled) {
         _cleanupStagedFiles(projectId);
-        _setState(const ImportCancelled());
+        if (!_isDisposed && token == _activeJobToken) {
+          _setState(const ImportCancelled());
+        }
         return;
       }
 
@@ -276,9 +298,11 @@ class ImportController extends ChangeNotifier {
       final stagedBytes = await File(stagedFilePath).readAsBytes();
       final summary = await decoder.decodeAndAnalyze(stagedBytes);
 
-      if (_isCancelled) {
+      if (token != _activeJobToken || _isCancelled) {
         _cleanupStagedFiles(projectId);
-        _setState(const ImportCancelled());
+        if (!_isDisposed && token == _activeJobToken) {
+          _setState(const ImportCancelled());
+        }
         return;
       }
 
@@ -299,9 +323,11 @@ class ImportController extends ChangeNotifier {
       );
       await thumbFile.writeAsBytes(summary.thumbnailBytes, flush: true);
 
-      if (_isCancelled) {
+      if (token != _activeJobToken || _isCancelled) {
         _cleanupStagedFiles(projectId);
-        _setState(const ImportCancelled());
+        if (!_isDisposed && token == _activeJobToken) {
+          _setState(const ImportCancelled());
+        }
         return;
       }
 
@@ -321,9 +347,12 @@ class ImportController extends ChangeNotifier {
         activePresetId: 'default_natural',
       );
 
+      final rawName = p.basenameWithoutExtension(sourcePath);
+      final uniqueName = projectRepository.resolveUniqueProjectName(rawName);
+
       final project = ProjectEntity(
         id: projectId,
-        name: p.basenameWithoutExtension(sourcePath),
+        name: uniqueName,
         sourceImagePath: stagedFilePath,
         sourceImageHash: stagedInfo.sha256Checksum,
         sourceWidth: summary.width,
@@ -333,10 +362,20 @@ class ImportController extends ChangeNotifier {
         recipe: recipe,
       );
 
+      if (token != _activeJobToken || _isCancelled) {
+        _cleanupStagedFiles(projectId);
+        return;
+      }
+
       await projectRepository.saveProject(project);
+
+      if (token != _activeJobToken || _isDisposed) {
+        return;
+      }
 
       _setState(ImportSuccess(project: project, imageSummary: summary));
     } on ImageValidationFailure catch (e) {
+      if (token != _activeJobToken || _isDisposed) return;
       _cleanupStagedFiles(projectId);
       _setState(
         ImportFailureState(
@@ -346,6 +385,7 @@ class ImportController extends ChangeNotifier {
         ),
       );
     } on ImageDecodingFailure catch (e) {
+      if (token != _activeJobToken || _isDisposed) return;
       _cleanupStagedFiles(projectId);
       _setState(
         ImportFailureState(
@@ -355,6 +395,7 @@ class ImportController extends ChangeNotifier {
         ),
       );
     } on ProjectFailure catch (e) {
+      if (token != _activeJobToken || _isDisposed) return;
       _cleanupStagedFiles(projectId);
       _setState(
         ImportFailureState(
@@ -364,6 +405,7 @@ class ImportController extends ChangeNotifier {
         ),
       );
     } catch (e) {
+      if (token != _activeJobToken || _isDisposed) return;
       _cleanupStagedFiles(projectId);
       _setState(
         ImportFailureState(
@@ -373,7 +415,9 @@ class ImportController extends ChangeNotifier {
         ),
       );
     } finally {
-      _isExecuting = false;
+      if (token == _activeJobToken) {
+        _isExecuting = false;
+      }
     }
   }
 

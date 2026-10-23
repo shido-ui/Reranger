@@ -123,7 +123,7 @@ class IsolateSceneMapGenerator {
     // Level 1: Half preview scale
     final halfW = math.max(1, prevWidth ~/ 2);
     final halfH = math.max(1, prevHeight ~/ 2);
-    final halfImg = (halfW < prevWidth && halfH < prevHeight)
+    final halfImg = (halfW < prevWidth || halfH < prevHeight)
         ? img.copyResize(previewImage, width: halfW, height: halfH)
         : previewImage;
     pyramids.add(
@@ -139,7 +139,7 @@ class IsolateSceneMapGenerator {
     // Level 2: Quarter preview scale
     final quartW = math.max(1, prevWidth ~/ 4);
     final quartH = math.max(1, prevHeight ~/ 4);
-    final quartImg = (quartW < prevWidth && quartH < prevHeight)
+    final quartImg = (quartW < prevWidth || quartH < prevHeight)
         ? img.copyResize(previewImage, width: quartW, height: quartH)
         : previewImage;
     pyramids.add(

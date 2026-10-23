@@ -79,6 +79,11 @@ class LocalProjectRepository implements ProjectRepository {
     fileStorage.deleteProjectDirectory(projectId);
   }
 
+  @override
+  String resolveUniqueProjectName(String baseName) {
+    return database.resolveUniqueProjectName(baseName);
+  }
+
   /// Runs orphan file cleanup against active projects in the database.
   Future<int> runOrphanCleanup() async {
     final projects = database.getRecentProjects();

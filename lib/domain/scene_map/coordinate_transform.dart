@@ -41,11 +41,11 @@ class NormalizedPoint {
       identical(this, other) ||
       other is NormalizedPoint &&
           runtimeType == other.runtimeType &&
-          (x - other.x).abs() < 1e-7 &&
-          (y - other.y).abs() < 1e-7;
+          x == other.x &&
+          y == other.y;
 
   @override
-  int get hashCode => Object.hash(x.toStringAsFixed(6), y.toStringAsFixed(6));
+  int get hashCode => Object.hash(x, y);
 
   @override
   String toString() =>
@@ -128,18 +128,13 @@ class NormalizedRect {
       identical(this, other) ||
       other is NormalizedRect &&
           runtimeType == other.runtimeType &&
-          (left - other.left).abs() < 1e-7 &&
-          (top - other.top).abs() < 1e-7 &&
-          (width - other.width).abs() < 1e-7 &&
-          (height - other.height).abs() < 1e-7;
+          left == other.left &&
+          top == other.top &&
+          width == other.width &&
+          height == other.height;
 
   @override
-  int get hashCode => Object.hash(
-    left.toStringAsFixed(6),
-    top.toStringAsFixed(6),
-    width.toStringAsFixed(6),
-    height.toStringAsFixed(6),
-  );
+  int get hashCode => Object.hash(left, top, width, height);
 
   @override
   String toString() =>

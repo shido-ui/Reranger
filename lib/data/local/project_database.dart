@@ -236,6 +236,35 @@ class ProjectDatabase {
     }
   }
 
+  /// Generates a unique, non-colliding project name from [baseName] (DEF-022).
+  /// If [baseName] already exists, deterministically appends " (1)", " (2)", etc.
+  String resolveUniqueProjectName(String baseName) {
+    var candidate = baseName.trim();
+    if (candidate.isEmpty) {
+      candidate = 'Untitled Project';
+    }
+    if (!projectNameExists(candidate)) {
+      return candidate;
+    }
+
+    final regex = RegExp(r'^(.*) \((\d+)\)$');
+    final match = regex.firstMatch(candidate);
+    String rootName = candidate;
+    int counter = 1;
+    if (match != null) {
+      rootName = match.group(1)!;
+      counter = int.parse(match.group(2)!) + 1;
+    }
+
+    while (true) {
+      final proposal = '$rootName ($counter)';
+      if (!projectNameExists(proposal)) {
+        return proposal;
+      }
+      counter++;
+    }
+  }
+
   /// Deletes a project record by ID.
   bool deleteProject(String id) {
     _db.execute('DELETE FROM projects WHERE id = ?;', [id]);

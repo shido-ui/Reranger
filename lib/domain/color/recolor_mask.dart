@@ -104,13 +104,13 @@ class RegionMask {
       final dist = math.sqrt(dr * dr + dg * dg + db * db);
 
       if (dist <= tolDist) {
-        // Fully within tolerance: modulate by alpha
-        mask.buffer[i] = ((a / 255.0) * 255.0).round().clamp(0, 255);
+        // Fully within tolerance (single alpha contract: pure selection weight in [0, 255])
+        mask.buffer[i] = 255;
       } else if (featherDist > 1e-4 && dist <= tolDist + featherDist) {
         // Smoothstep cubic Hermite falloff
         final t = (dist - tolDist) / featherDist;
         final weight = 1.0 - (3.0 * t * t - 2.0 * t * t * t);
-        final val = (weight * (a / 255.0) * 255.0).round().clamp(0, 255);
+        final val = (weight * 255.0).round().clamp(0, 255);
         mask.buffer[i] = val;
       } else {
         mask.buffer[i] = 0;

@@ -381,6 +381,30 @@ class EditorController extends ChangeNotifier {
     projectRepository.writeDirtyJournal(project!.id, recipe);
   }
 
+  /// Renders the active graph at full source resolution (multiplied by [scale]).
+  /// Guaranteed not to use downscaled preview viewport buffers (DEF-025).
+  Future<img.Image> renderFullResolutionOutput({double scale = 1.0}) async {
+    if (sourceImageBytes == null || project == null || activePreset == null) {
+      throw StateError(
+        'Cannot render output: Project or preset is not initialized.',
+      );
+    }
+
+    final fullGraph = buildActiveGraph();
+    final fullResult = await renderJobController.executor.execute(
+      graph: fullGraph,
+      sourceImageBytes: sourceImageBytes!,
+      renderScale: scale.clamp(0.1, 4.0),
+    );
+
+    return img.Image.fromBytes(
+      width: fullResult.width,
+      height: fullResult.height,
+      bytes: fullResult.pixelBytes.buffer,
+      numChannels: 4,
+    );
+  }
+
   /// Atomically saves the rendered output to local storage and updates project metadata.
   Future<bool> saveProject() async {
     if (previewPngBytes == null || project == null || activePreset == null) {

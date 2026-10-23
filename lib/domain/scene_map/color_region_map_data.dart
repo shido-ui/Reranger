@@ -26,7 +26,10 @@ class ColorRegionMapData {
          gridWidth > 0 && gridHeight > 0,
          'Grid dimensions must be positive',
        ),
-       assert(regionCount > 0, 'Region count must be positive'),
+       assert(
+         regionCount > 0 && regionCount <= 256,
+         'Region count must be between 1 and 256 for 8-bit label buffers',
+       ),
        assert(
          regionLabels.length == gridWidth * gridHeight,
          'Label buffer length must match gridWidth * gridHeight',
