@@ -238,7 +238,7 @@ void main() {
       print(exportStats);
 
       // 7. Humanize Lifecycle & Inference (5 runs)
-      final humanizeAdapter = LocalHumanizeAdapter();
+      final humanizeAdapter = LocalHumanizeAdapter(isLoadedForTesting: true);
       final swInit = Stopwatch()..start();
       final selfTestRes = await humanizeAdapter.runSelfTest();
       swInit.stop();
