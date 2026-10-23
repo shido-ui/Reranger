@@ -5,6 +5,8 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'render_pipeline_failure.dart';
 import 'style_render_nodes.dart';
 import 'recolor_render_node.dart';
+import 'adversarial_stealth_node.dart';
+import 'pixelate_quantize_node.dart';
 
 /// Abstract base class for all versioned nodes in the Render Graph.
 /// Enforces:
@@ -97,6 +99,10 @@ abstract class RenderGraphNode {
         return DuoToneNode.fromJson(json);
       case RecolorNode.nodeType:
         return RecolorNode.fromJson(json);
+      case AdversarialStealthNode.nodeType:
+        return AdversarialStealthNode.fromJson(json);
+      case PixelateQuantizeNode.nodeType:
+        return PixelateQuantizeNode.fromJson(json);
       default:
         throw RenderInvalidParametersFailure(
           nodeId: json['id'] as String? ?? 'unknown',

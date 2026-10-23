@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../../../domain/layers/editor_layer.dart';
 import '../../../domain/layers/history_command.dart';
 import '../../../domain/layers/variant_board.dart';
@@ -61,7 +63,7 @@ class LayerHistoryState {
 }
 
 /// Unified presentation controller governing non-destructive layers, history deltas, and variants.
-class LayerHistoryController {
+class LayerHistoryController extends ChangeNotifier {
   final HistoryManager _history;
   LayerHistoryState _state;
   bool _renderCancelled = false;
@@ -127,6 +129,7 @@ class LayerHistoryController {
       undoCount: _history.undoCount,
       redoCount: _history.redoCount,
     );
+    notifyListeners();
   }
 
   /// Sets opacity on a layer via an undoable command.
@@ -203,6 +206,7 @@ class LayerHistoryController {
       undoCount: _history.undoCount,
       redoCount: _history.redoCount,
     );
+    notifyListeners();
   }
 
   /// Re-applies the most recently reverted command.
@@ -219,6 +223,7 @@ class LayerHistoryController {
       undoCount: _history.undoCount,
       redoCount: _history.redoCount,
     );
+    notifyListeners();
   }
 
   /// Reverts all active edits back to baseline.
@@ -233,6 +238,7 @@ class LayerHistoryController {
       undoCount: 0,
       redoCount: _history.redoCount,
     );
+    notifyListeners();
   }
 
   /// Re-applies all edits back to latest state.
@@ -247,6 +253,7 @@ class LayerHistoryController {
       undoCount: _history.undoCount,
       redoCount: 0,
     );
+    notifyListeners();
   }
 
   /// Creates a new variant and switches to it.
@@ -273,6 +280,7 @@ class LayerHistoryController {
           : null,
       clearWarning: !isStochastic,
     );
+    notifyListeners();
   }
 
   /// Switches active variant without re-decoding immutable source media.
@@ -291,6 +299,30 @@ class LayerHistoryController {
       activeWarning: active.stochasticWarning,
       clearWarning: active.stochasticWarning == null,
     );
+    notifyListeners();
+  }
+
+  /// Renames an existing variant.
+  void renameVariant(String variantId, String newName) {
+    final updatedBoard = _state.variantBoard.renameVariant(variantId, newName);
+    _state = _state.copyWith(variantBoard: updatedBoard);
+    notifyListeners();
+  }
+
+  /// Deletes an existing variant.
+  void deleteVariant(String variantId) {
+    final updatedBoard = _state.variantBoard.deleteVariant(variantId);
+    final active = updatedBoard.activeVariant;
+    _history.clear();
+    _state = _state.copyWith(
+      layerStack: active.layerStack,
+      variantBoard: updatedBoard,
+      canUndo: false,
+      canRedo: false,
+      undoCount: 0,
+      redoCount: 0,
+    );
+    notifyListeners();
   }
 
   /// Configures split-screen before/after comparison mode.
@@ -299,6 +331,7 @@ class LayerHistoryController {
       isSplitComparisonActive: active,
       splitPosition: position.clamp(0.0, 1.0),
     );
+    notifyListeners();
   }
 
   /// Signals cancellation for in-flight render job.

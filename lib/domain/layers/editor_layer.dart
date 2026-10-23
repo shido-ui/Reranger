@@ -325,17 +325,25 @@ class LayerStack {
   }
 
   /// Flattens the layer stack into a topologically validated [RenderGraph].
-  RenderGraph toRenderGraph() {
-    final src = sourceLayer;
-    final rootNode = SourceImageNode(
-      id: src.id,
-      sourceImageHash: src.sourceHash,
-      sourceWidth: src.sourceWidth,
-      sourceHeight: src.sourceHeight,
-    );
+  /// If [baseGraph] is supplied, adjustment layers are chained on top of the active base graph.
+  RenderGraph toRenderGraph({RenderGraph? baseGraph}) {
+    final Map<String, RenderGraphNode> nodesMap;
+    String currentOutputId;
 
-    final nodesMap = <String, RenderGraphNode>{rootNode.id: rootNode};
-    String currentOutputId = rootNode.id;
+    if (baseGraph != null) {
+      nodesMap = Map<String, RenderGraphNode>.from(baseGraph.nodes);
+      currentOutputId = baseGraph.outputNodeId;
+    } else {
+      final src = sourceLayer;
+      final rootNode = SourceImageNode(
+        id: src.id,
+        sourceImageHash: src.sourceHash,
+        sourceWidth: src.sourceWidth,
+        sourceHeight: src.sourceHeight,
+      );
+      nodesMap = <String, RenderGraphNode>{rootNode.id: rootNode};
+      currentOutputId = rootNode.id;
+    }
 
     for (int i = 1; i < layers.length; i++) {
       final layer = layers[i];

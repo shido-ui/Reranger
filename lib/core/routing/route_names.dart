@@ -7,4 +7,6 @@ class AppRouteNames {
   static const String settings = '/settings';
   static const String analysis = '/import/analysis';
   static const String editor = '/editor/:id';
+  static const String recolor = '/editor/:id/recolor';
+  static const String humanize = '/editor/:id/humanize';
 }

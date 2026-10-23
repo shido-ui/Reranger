@@ -14,7 +14,7 @@ class BatchCPresets {
     id: 'watercolor',
     displayName: 'Watercolor',
     category: 'Painting Studio',
-    description: 'Delicate translucent pigment washes with soft edge bleeding and textured paper tooth.',
+    description: 'Simulated translucent watercolor wash via edge-softened contour subtraction, duotone color grading, and cold-press paper grain overlay.',
     version: 1,
     parameters: const [
       PresetParameter(
@@ -90,7 +90,7 @@ class BatchCPresets {
     id: 'oil_paint',
     displayName: 'Oil Paint',
     category: 'Painting Studio',
-    description: 'Rich classical oil impasto with textured linen canvas tooth and luminous warm varnishing.',
+    description: 'Simulated classical oil impasto via high-contrast edge contour enhancement, warm tone mapping, and textured linen canvas grain overlay.',
     version: 1,
     parameters: const [
       PresetParameter(

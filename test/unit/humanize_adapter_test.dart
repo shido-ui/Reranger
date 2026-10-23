@@ -99,8 +99,27 @@ void main() {
   });
 
   group('Source-Conditioned Neural Inference & Invariant 4 Immutability', () {
-    test('Source image buffer is strictly immutable during and after inference (Invariant 4)', () async {
+    test('Unloaded adapter strictly rejects inference with ModelNotLoadedException (Invariant 7)', () async {
       final adapter = LocalHumanizeAdapter(totalRamBytes: 12 * gb);
+      final input = HumanizeInput(
+        sourceRgba: Uint8List(64 * 64 * 4),
+        width: 64,
+        height: 64,
+        strength: 0.25,
+        seed: 1234,
+      );
+
+      expect(
+        () => adapter.runInference(input),
+        throwsA(isA<ModelNotLoadedException>()),
+      );
+    });
+
+    test('Source image buffer is strictly immutable during and after inference (Invariant 4)', () async {
+      final adapter = LocalHumanizeAdapter(
+        totalRamBytes: 12 * gb,
+        isLoadedForTesting: true,
+      );
       const w = 64;
       const h = 64;
       final source = Uint8List(w * h * 4);
@@ -142,7 +161,10 @@ void main() {
     });
 
     test('Alpha channel is strictly preserved across transparent and semitransparent pixels', () async {
-      final adapter = LocalHumanizeAdapter(totalRamBytes: 12 * gb);
+      final adapter = LocalHumanizeAdapter(
+        totalRamBytes: 12 * gb,
+        isLoadedForTesting: true,
+      );
       const w = 32;
       const h = 32;
       final source = Uint8List(w * h * 4);
@@ -178,7 +200,10 @@ void main() {
     test(
       'Progress notifications stream through all pipeline stages sequentially',
       () async {
-        final adapter = LocalHumanizeAdapter(totalRamBytes: 12 * gb);
+        final adapter = LocalHumanizeAdapter(
+          totalRamBytes: 12 * gb,
+          isLoadedForTesting: true,
+        );
         const w = 32;
         const h = 32;
         final source = Uint8List(w * h * 4)..fillRange(0, w * h * 4, 128);
@@ -210,7 +235,10 @@ void main() {
     test(
       'Cancellation token aborts inference and resets lock immediately',
       () async {
-        final adapter = LocalHumanizeAdapter(totalRamBytes: 12 * gb);
+        final adapter = LocalHumanizeAdapter(
+          totalRamBytes: 12 * gb,
+          isLoadedForTesting: true,
+        );
         const w = 32;
         const h = 32;
         final source = Uint8List(w * h * 4)..fillRange(0, w * h * 4, 128);
@@ -234,7 +262,10 @@ void main() {
     );
 
     test('Concurrent inference requests are rejected with ConcurrentInferenceException', () async {
-      final adapter = LocalHumanizeAdapter(totalRamBytes: 12 * gb);
+      final adapter = LocalHumanizeAdapter(
+        totalRamBytes: 12 * gb,
+        isLoadedForTesting: true,
+      );
       const w = 32;
       const h = 32;
       final source = Uint8List(w * h * 4)..fillRange(0, w * h * 4, 128);
@@ -264,16 +295,36 @@ void main() {
   });
 
   group('Fixed-Input Dry-Run / Self-Test & Lifecycle Management', () {
-    test('runSelfTest verifies model validity and bounded residual', () async {
+    test('runSelfTest fails honestly when no verified model is loaded (Invariant 7)', () async {
       final adapter = LocalHumanizeAdapter(totalRamBytes: 12 * gb);
       final testResult = await adapter.runSelfTest();
 
-      expect(testResult.passed, isTrue);
-      expect(testResult.compositionResidual, greaterThan(0.005));
-      expect(testResult.compositionResidual, lessThan(0.15));
-      expect(testResult.durationMs, greaterThanOrEqualTo(0));
-      expect(testResult.message, contains('Startup dry-run self-test passed'));
+      expect(testResult.passed, isFalse);
+      expect(
+        testResult.message,
+        contains('No verified neural model is loaded'),
+      );
     });
+
+    test(
+      'runSelfTest verifies model validity and bounded residual when loaded',
+      () async {
+        final adapter = LocalHumanizeAdapter(
+          totalRamBytes: 12 * gb,
+          isLoadedForTesting: true,
+        );
+        final testResult = await adapter.runSelfTest();
+
+        expect(testResult.passed, isTrue);
+        expect(testResult.compositionResidual, greaterThan(0.005));
+        expect(testResult.compositionResidual, lessThan(0.15));
+        expect(testResult.durationMs, greaterThanOrEqualTo(0));
+        expect(
+          testResult.message,
+          contains('Startup dry-run self-test passed'),
+        );
+      },
+    );
 
     test(
       'onAppBackgrounded unloads model on constrained hardware tier',

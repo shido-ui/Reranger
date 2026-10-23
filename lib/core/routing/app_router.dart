@@ -5,9 +5,11 @@ import 'package:go_router/go_router.dart';
 import '../../features/creations/presentation/creations_screen.dart';
 import '../../features/editor/presentation/editor_screen.dart';
 import '../../features/home/presentation/home_screen.dart';
+import '../../features/humanize/presentation/humanize_screen_host.dart';
 import '../../features/import/presentation/analysis_screen.dart';
 import '../../features/import/presentation/import_controller.dart';
 import '../../features/import/presentation/import_providers.dart';
+import '../../features/recolor/presentation/recolor_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/shell/presentation/main_shell_screen.dart';
 import 'route_names.dart';
@@ -69,6 +71,22 @@ final GoRouter appRouter = GoRouter(
       builder: (context, state) {
         final id = state.pathParameters['id'] ?? 'unknown';
         return EditorScreen(projectId: id);
+      },
+    ),
+    GoRoute(
+      parentNavigatorKey: _rootNavigatorKey,
+      path: AppRouteNames.recolor,
+      builder: (context, state) {
+        final id = state.pathParameters['id'] ?? 'unknown';
+        return RecolorScreen(projectId: id);
+      },
+    ),
+    GoRoute(
+      parentNavigatorKey: _rootNavigatorKey,
+      path: AppRouteNames.humanize,
+      builder: (context, state) {
+        final id = state.pathParameters['id'] ?? 'unknown';
+        return HumanizeScreenHost(projectId: id);
       },
     ),
   ],

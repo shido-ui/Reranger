@@ -134,7 +134,14 @@ class HumanizeController extends ChangeNotifier {
             caps.unavailabilityReason ??
             'Humanize Studio requires at least 6 GB of physical device RAM.';
       } else {
-        _status = HumanizeUiStatus.idle;
+        final hasModel = await _adapter.isModelAvailable();
+        if (!hasModel &&
+            _adapter.lifecycleState != HumanizeLifecycleState.ready) {
+          _status = HumanizeUiStatus.modelNotInstalled;
+          _unavailabilityReason = 'Humanize neural model weights are not installed on device. Download required on-demand.';
+        } else {
+          _status = HumanizeUiStatus.idle;
+        }
       }
     } catch (e) {
       _status = HumanizeUiStatus.error;
@@ -257,6 +264,9 @@ class HumanizeController extends ChangeNotifier {
       _status = HumanizeUiStatus.unsupportedHardware;
       _unavailabilityReason = e.message;
     } on ModelNotFoundException catch (e) {
+      _status = HumanizeUiStatus.modelNotInstalled;
+      _unavailabilityReason = e.message;
+    } on ModelNotLoadedException catch (e) {
       _status = HumanizeUiStatus.modelNotInstalled;
       _unavailabilityReason = e.message;
     } catch (e) {

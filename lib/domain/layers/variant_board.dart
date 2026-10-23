@@ -154,6 +154,26 @@ class VariantBoard {
     );
   }
 
+  /// Renames an existing variant.
+  VariantBoard renameVariant(String variantId, String newName) {
+    if (newName.trim().isEmpty) {
+      throw ArgumentError('Variant name cannot be empty');
+    }
+    if (!variants.any((v) => v.id == variantId)) {
+      throw ArgumentError('Variant "$variantId" not found');
+    }
+    final updatedList = variants.map((v) {
+      if (v.id == variantId) {
+        return v.copyWith(name: newName.trim());
+      }
+      return v;
+    }).toList();
+    return VariantBoard(
+      variants: updatedList,
+      activeVariantId: activeVariantId,
+    );
+  }
+
   /// Deletes a variant. Requires at least 1 remaining variant.
   VariantBoard deleteVariant(String variantId) {
     if (variants.length <= 1) {

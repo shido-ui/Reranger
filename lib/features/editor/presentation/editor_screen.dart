@@ -74,6 +74,36 @@ class EditorScreen extends ConsumerWidget {
               },
             ),
             actions: [
+              // Recolor Studio Entry Button (Prompt B)
+              IconButton(
+                key: const ValueKey('recolor_studio_button'),
+                icon: const Icon(Icons.palette_outlined),
+                tooltip: 'Recolor Studio',
+                onPressed: () {
+                  final target = AppRouteNames.recolor.replaceAll(
+                    ':id',
+                    projectId,
+                  );
+                  if (GoRouter.maybeOf(context) != null) {
+                    context.push(target);
+                  }
+                },
+              ),
+              // Humanize Studio Entry Button (Prompt B)
+              IconButton(
+                key: const ValueKey('humanize_studio_button'),
+                icon: const Icon(Icons.face_retouching_natural_outlined),
+                tooltip: 'Humanize Studio',
+                onPressed: () {
+                  final target = AppRouteNames.humanize.replaceAll(
+                    ':id',
+                    projectId,
+                  );
+                  if (GoRouter.maybeOf(context) != null) {
+                    context.push(target);
+                  }
+                },
+              ),
               // Pro Tools Studio Entry Button
               IconButton(
                 icon: const Icon(Icons.auto_awesome),

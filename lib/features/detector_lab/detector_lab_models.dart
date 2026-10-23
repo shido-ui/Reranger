@@ -1,17 +1,27 @@
 import 'dart:typed_data';
 
-/// Provenance status indicating C2PA metadata validity.
+/// Provenance status indicating C2PA metadata detection.
+///
+/// Invariant 7: Honest Provenance & Signal Inspection.
+/// Raw byte marker matching detects the physical presence of a C2PA JUMBF container,
+/// but does NOT validate cryptographic trust chains or X.509 signatures without
+/// an on-device PKI trust root. Status is truthfully declared.
 enum C2paStatus {
-  valid,
+  manifestContainerDetectedUnverified,
   invalid,
   missing;
 
+  @Deprecated(
+    'Use manifestContainerDetectedUnverified for truthful provenance reporting',
+  )
+  static const C2paStatus valid = manifestContainerDetectedUnverified;
+
   String get label {
     switch (this) {
-      case C2paStatus.valid:
-        return 'Valid C2PA Signature';
+      case C2paStatus.manifestContainerDetectedUnverified:
+        return 'C2PA Container Detected (Signature Unverified)';
       case C2paStatus.invalid:
-        return 'Corrupt or Tampered C2PA Box';
+        return 'Corrupt or Malformed C2PA Box';
       case C2paStatus.missing:
         return 'No supported provenance signal found.';
     }
@@ -30,7 +40,9 @@ class C2paProvenanceResult {
     required this.message,
   });
 
-  bool get isValid => status == C2paStatus.valid;
+  bool get isValid => status == C2paStatus.manifestContainerDetectedUnverified;
+  bool get isContainerDetected =>
+      status == C2paStatus.manifestContainerDetectedUnverified;
   bool get isMissing => status == C2paStatus.missing;
 }
 
@@ -69,9 +81,9 @@ class C2paParser {
       final matchIdx = c2paIdx != -1 ? c2paIdx : jumbIdx;
       if (matchIdx + 8 <= bytes.length) {
         return const C2paProvenanceResult(
-          status: C2paStatus.valid,
-          manifestIssuer: 'urn:c2pa:reranger-provenance-authority',
-          message: 'Valid signed C2PA manifest found: urn:c2pa:reranger-provenance-authority',
+          status: C2paStatus.manifestContainerDetectedUnverified,
+          manifestIssuer: null,
+          message: 'C2PA manifest container detected. Signature is unverified (cryptographic validation requires on-device PKI trust root).',
         );
       } else {
         return const C2paProvenanceResult(
@@ -266,7 +278,7 @@ class BenchmarkMetrics {
       }
 
       switch (p.provenance.status) {
-        case C2paStatus.valid:
+        case C2paStatus.manifestContainerDetectedUnverified:
           validC2pa++;
           break;
         case C2paStatus.invalid:

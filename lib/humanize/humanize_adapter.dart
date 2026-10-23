@@ -10,6 +10,20 @@ enum HardwareTier {
 
   /// < 6 GB RAM: Strictly gated off to eliminate Android OOM kills (Invariant 11).
   unsupportedOomRisk,
+
+  /// RAM cannot be verified by platform APIs; safe fallback to prevent OOM.
+  unknown,
+}
+
+/// Explicit testable lifecycle states of the Humanize runtime.
+enum HumanizeLifecycleState {
+  unavailable,
+  notInstalled,
+  loading,
+  ready,
+  running,
+  failed,
+  unloading,
 }
 
 /// Granular phases of the local neural refinement pipeline.
@@ -179,6 +193,12 @@ class ModelNotFoundException extends HumanizeException {
     : super('Model file not found at path: $modelPath');
 }
 
+class ModelNotLoadedException extends HumanizeException {
+  const ModelNotLoadedException([
+    super.message = 'Cannot execute inference: No verified neural model is currently loaded in memory.',
+  ]);
+}
+
 class ModelCorruptedException extends HumanizeException {
   final String expectedHash;
   final String actualHash;
@@ -217,6 +237,9 @@ class ConcurrentInferenceException extends HumanizeException {
 
 /// Typed abstract contract decoupling UI and domain logic from native engines.
 abstract class HumanizeAdapter {
+  /// Observable lifecycle state of this adapter.
+  HumanizeLifecycleState get lifecycleState;
+
   /// Queries static and dynamic runtime capabilities.
   Future<HumanizeCapabilities> getCapabilities();
 
@@ -253,6 +276,10 @@ class TruthfulUnavailableHumanizeAdapter implements HumanizeAdapter {
     this.tier = HardwareTier.unsupportedOomRisk,
     this.reason = 'Humanize Studio requires at least 6 GB of physical RAM and approved on-device weights.',
   });
+
+  @override
+  HumanizeLifecycleState get lifecycleState =>
+      HumanizeLifecycleState.unavailable;
 
   @override
   Future<HumanizeCapabilities> getCapabilities() async {

@@ -11,6 +11,7 @@ import '../../domain/recipes/recolor_render_node.dart';
 import '../../domain/color/color_palette.dart';
 import '../../domain/color/recolor_mask.dart';
 import '../../domain/recipes/adversarial_stealth_node.dart';
+import '../../domain/recipes/pixelate_quantize_node.dart';
 import 'render_node_cache.dart';
 
 /// Structured execution result of a render graph evaluation.
@@ -266,6 +267,16 @@ class RenderGraphExecutor {
         height: height,
         strength: node.strength,
         applyFrequencyPerturbation: node.applyFrequencyPerturbation,
+      );
+    } else if (node is PixelateQuantizeNode) {
+      final input = nodeOutputs[node.inputNodeIds[0]]!;
+      return _computePixelateQuantize(
+        input: input,
+        width: width,
+        height: height,
+        blockSize: node.blockSize,
+        paletteLevels: node.paletteLevels,
+        preserveAlpha: node.preserveAlpha,
       );
     } else {
       throw RenderNodeExecutionFailure(
@@ -724,6 +735,64 @@ class RenderGraphExecutor {
         dst[off + 1] = (input[off + 1] + delta).round().clamp(0, 255);
         dst[off + 2] = (input[off + 2] + delta).round().clamp(0, 255);
         dst[off + 3] = input[off + 3];
+      }
+    }
+    return dst;
+  }
+
+  static Uint8List _computePixelateQuantize({
+    required Uint8List input,
+    required int width,
+    required int height,
+    required int blockSize,
+    required int paletteLevels,
+    required bool preserveAlpha,
+  }) {
+    final total = width * height;
+    final dst = Uint8List(total * 4);
+    final minDim = math.min(width, height);
+    final int block = blockSize.clamp(1, math.max(1, minDim)).toInt();
+    final levels = paletteLevels.clamp(2, 256);
+    final step = 255.0 / (levels - 1);
+
+    int quantizeChannel(int val) {
+      final q = (val / step).round();
+      return (q * step).round().clamp(0, 255);
+    }
+
+    for (int by = 0; by < height; by += block) {
+      final int bh = math.min(block, height - by);
+      for (int bx = 0; bx < width; bx += block) {
+        final int bw = math.min(block, width - bx);
+
+        int sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+        final count = bw * bh;
+        for (int dy = 0; dy < bh; dy++) {
+          final rowOff = (by + dy) * width;
+          for (int dx = 0; dx < bw; dx++) {
+            final off = (rowOff + bx + dx) * 4;
+            sumR += input[off];
+            sumG += input[off + 1];
+            sumB += input[off + 2];
+            sumA += input[off + 3];
+          }
+        }
+
+        final avgR = quantizeChannel(sumR ~/ count);
+        final avgG = quantizeChannel(sumG ~/ count);
+        final avgB = quantizeChannel(sumB ~/ count);
+        final avgA = preserveAlpha ? (sumA ~/ count) : 255;
+
+        for (int dy = 0; dy < bh; dy++) {
+          final rowOff = (by + dy) * width;
+          for (int dx = 0; dx < bw; dx++) {
+            final off = (rowOff + bx + dx) * 4;
+            dst[off] = avgR;
+            dst[off + 1] = avgG;
+            dst[off + 2] = avgB;
+            dst[off + 3] = preserveAlpha ? input[off + 3] : avgA;
+          }
+        }
       }
     }
     return dst;

@@ -34,12 +34,15 @@ void main() {
           0x07,
         ]);
         final validResult = C2paParser.parseBytes(validBytes);
-        expect(validResult.status, equals(C2paStatus.valid));
-        expect(validResult.isValid, isTrue);
         expect(
-          validResult.manifestIssuer,
-          equals('urn:c2pa:reranger-provenance-authority'),
+          validResult.status,
+          equals(C2paStatus.manifestContainerDetectedUnverified),
         );
+        expect(validResult.isValid, isTrue);
+        expect(validResult.isContainerDetected, isTrue);
+        // Invariant 7: Honest detection, no fake authority claims
+        expect(validResult.manifestIssuer, isNull);
+        expect(validResult.message, contains('unverified'));
 
         // 3. Corrupt C2PA Box
         final corruptBytes = Uint8List.fromList([

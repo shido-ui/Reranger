@@ -2,6 +2,9 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+import '../layers/editor_layer.dart';
+import '../layers/variant_board.dart';
+
 /// Base class for project and storage failures.
 sealed class ProjectFailure implements Exception {
   final String message;
@@ -107,6 +110,8 @@ class RenderRecipe {
   final List<int> curveLut256;
   final List<ColorVector> paletteRemap;
   final String? maskPath;
+  final LayerStack? layerStack;
+  final VariantBoard? variantBoard;
   final DateTime updatedAt;
 
   const RenderRecipe({
@@ -121,6 +126,8 @@ class RenderRecipe {
     required this.curveLut256,
     required this.paletteRemap,
     this.maskPath,
+    this.layerStack,
+    this.variantBoard,
     required this.updatedAt,
   });
 
@@ -160,11 +167,14 @@ class RenderRecipe {
     List<int>? curveLut256,
     List<ColorVector>? paletteRemap,
     String? maskPath,
+    LayerStack? layerStack,
+    VariantBoard? variantBoard,
+    int? recipeVersion,
     DateTime? updatedAt,
   }) {
     return RenderRecipe(
       recipeId: recipeId,
-      recipeVersion: recipeVersion,
+      recipeVersion: recipeVersion ?? this.recipeVersion,
       sourceImageHash: sourceImageHash,
       sourceImagePath: sourceImagePath,
       activeStudio: activeStudio ?? this.activeStudio,
@@ -174,6 +184,8 @@ class RenderRecipe {
       curveLut256: curveLut256 ?? this.curveLut256,
       paletteRemap: paletteRemap ?? this.paletteRemap,
       maskPath: maskPath ?? this.maskPath,
+      layerStack: layerStack ?? this.layerStack,
+      variantBoard: variantBoard ?? this.variantBoard,
       updatedAt: updatedAt ?? DateTime.now().toUtc(),
     );
   }
@@ -190,6 +202,8 @@ class RenderRecipe {
     'curveLut256': curveLut256,
     'paletteRemap': paletteRemap.map((c) => c.toJson()).toList(),
     'maskPath': maskPath,
+    if (layerStack != null) 'layerStack': layerStack!.toJson(),
+    if (variantBoard != null) 'variantBoard': variantBoard!.toJson(),
     'updatedAt': updatedAt.toIso8601String(),
   };
 
@@ -213,6 +227,12 @@ class RenderRecipe {
               .toList() ??
           const [],
       maskPath: json['maskPath'] as String?,
+      layerStack: json['layerStack'] != null
+          ? LayerStack.fromJson(json['layerStack'] as Map<String, dynamic>)
+          : null,
+      variantBoard: json['variantBoard'] != null
+          ? VariantBoard.fromJson(json['variantBoard'] as Map<String, dynamic>)
+          : null,
       updatedAt: DateTime.parse(json['updatedAt'] as String),
     );
   }

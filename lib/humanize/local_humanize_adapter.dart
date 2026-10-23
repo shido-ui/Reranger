@@ -24,16 +24,42 @@ class LocalHumanizeAdapter implements HumanizeAdapter {
   bool _isInferring = false;
   String? _loadedModelPath;
   String? _loadedLoraPath;
+  HumanizeLifecycleState _lifecycleState = HumanizeLifecycleState.notInstalled;
 
   LocalHumanizeAdapter({
     this.totalRamBytes = 12 * 1024 * 1024 * 1024, // Default to 12 GB Pixel 10
     this.overrideModelPath,
-  });
+    bool isLoadedForTesting = false,
+  }) {
+    if (hardwareTier == HardwareTier.unsupportedOomRisk) {
+      _lifecycleState = HumanizeLifecycleState.unavailable;
+    } else if (isLoadedForTesting) {
+      _isLoaded = true;
+      _lifecycleState = HumanizeLifecycleState.ready;
+    } else {
+      _lifecycleState = HumanizeLifecycleState.notInstalled;
+    }
+  }
+
+  @override
+  HumanizeLifecycleState get lifecycleState => _lifecycleState;
 
   bool get isLoaded => _isLoaded;
   bool get isInferring => _isInferring;
   String? get loadedModelPath => _loadedModelPath;
   String? get loadedLoraPath => _loadedLoraPath;
+
+  /// Helper enabling controlled unit testing of inference algorithms without requiring physical 2GB weights on disk.
+  void setLoadedForTesting(bool loaded) {
+    _isLoaded = loaded;
+    if (loaded) {
+      _lifecycleState = HumanizeLifecycleState.ready;
+    } else {
+      _lifecycleState = (hardwareTier == HardwareTier.unsupportedOomRisk)
+          ? HumanizeLifecycleState.unavailable
+          : HumanizeLifecycleState.notInstalled;
+    }
+  }
 
   /// Classifies host hardware tier against strict thermal and OOM budgets (Invariant 11).
   HardwareTier get hardwareTier {
@@ -83,10 +109,18 @@ class LocalHumanizeAdapter implements HumanizeAdapter {
 
   @override
   Future<bool> isModelAvailable() async {
+    if (_isLoaded) return true;
     final path = overrideModelPath ?? _loadedModelPath;
     if (path == null) return false;
     final file = File(path);
     return file.existsSync();
+  }
+
+  /// Computes cryptographic SHA-256 via bounded 64KB streaming chunks to eliminate OOM risks (Invariant 11).
+  static Future<String> _streamComputeSha256(File file) async {
+    final stream = file.openRead();
+    final digest = await crypto.sha256.bind(stream).first;
+    return digest.toString().toLowerCase();
   }
 
   @override
@@ -98,53 +132,66 @@ class LocalHumanizeAdapter implements HumanizeAdapter {
       throw HardwareTierUnsupportedException(totalRamBytes);
     }
 
-    final modelFile = File(modelPath);
-    if (!modelFile.existsSync()) {
-      throw ModelNotFoundException(modelPath);
-    }
+    _lifecycleState = HumanizeLifecycleState.loading;
 
-    // Verify cryptographic SHA-256 integrity (Invariant 10)
-    final modelBytes = await modelFile.readAsBytes();
-    final modelHash = crypto.sha256
-        .convert(modelBytes)
-        .toString()
-        .toLowerCase();
-
-    if (modelHash != canonicalBaseModelSha256.toLowerCase()) {
-      throw ModelCorruptedException(
-        expectedHash: canonicalBaseModelSha256,
-        actualHash: modelHash,
-      );
-    }
-
-    if (loraPath != null) {
-      final loraFile = File(loraPath);
-      if (!loraFile.existsSync()) {
-        throw ModelNotFoundException(loraPath);
+    try {
+      final modelFile = File(modelPath);
+      if (!modelFile.existsSync()) {
+        _lifecycleState = HumanizeLifecycleState.notInstalled;
+        throw ModelNotFoundException(modelPath);
       }
-      final loraBytes = await loraFile.readAsBytes();
-      final loraHash = crypto.sha256
-          .convert(loraBytes)
-          .toString()
-          .toLowerCase();
-      if (loraHash != canonicalLcmLoraSha256.toLowerCase()) {
+
+      // Verify cryptographic SHA-256 integrity via streaming chunks (Invariant 10 & 11)
+      final modelHash = await _streamComputeSha256(modelFile);
+
+      if (modelHash != canonicalBaseModelSha256.toLowerCase()) {
+        _lifecycleState = HumanizeLifecycleState.failed;
         throw ModelCorruptedException(
-          expectedHash: canonicalLcmLoraSha256,
-          actualHash: loraHash,
+          expectedHash: canonicalBaseModelSha256,
+          actualHash: modelHash,
         );
       }
-      _loadedLoraPath = loraPath;
-    }
 
-    _loadedModelPath = modelPath;
-    _isLoaded = true;
+      if (loraPath != null) {
+        final loraFile = File(loraPath);
+        if (!loraFile.existsSync()) {
+          _lifecycleState = HumanizeLifecycleState.notInstalled;
+          throw ModelNotFoundException(loraPath);
+        }
+        final loraHash = await _streamComputeSha256(loraFile);
+        if (loraHash != canonicalLcmLoraSha256.toLowerCase()) {
+          _lifecycleState = HumanizeLifecycleState.failed;
+          throw ModelCorruptedException(
+            expectedHash: canonicalLcmLoraSha256,
+            actualHash: loraHash,
+          );
+        }
+        _loadedLoraPath = loraPath;
+      }
+
+      _loadedModelPath = modelPath;
+      _isLoaded = true;
+      _lifecycleState = HumanizeLifecycleState.ready;
+    } catch (e) {
+      _isLoaded = false;
+      _loadedModelPath = null;
+      _loadedLoraPath = null;
+      if (e is! ModelNotFoundException && e is! ModelCorruptedException) {
+        _lifecycleState = HumanizeLifecycleState.failed;
+      }
+      rethrow;
+    }
   }
 
   @override
   Future<void> unloadModel() async {
+    _lifecycleState = HumanizeLifecycleState.unloading;
     _isLoaded = false;
     _loadedModelPath = null;
     _loadedLoraPath = null;
+    _lifecycleState = (hardwareTier == HardwareTier.unsupportedOomRisk)
+        ? HumanizeLifecycleState.unavailable
+        : HumanizeLifecycleState.notInstalled;
   }
 
   @override
@@ -161,7 +208,14 @@ class LocalHumanizeAdapter implements HumanizeAdapter {
       throw const ConcurrentInferenceException();
     }
 
+    if (!_isLoaded) {
+      throw const ModelNotLoadedException(
+        'Cannot execute inference: No verified neural model is currently loaded in memory.',
+      );
+    }
+
     _isInferring = true;
+    _lifecycleState = HumanizeLifecycleState.running;
     final stopwatch = Stopwatch()..start();
 
     try {
@@ -353,11 +407,23 @@ class LocalHumanizeAdapter implements HumanizeAdapter {
       );
     } finally {
       _isInferring = false;
+      if (_isLoaded) {
+        _lifecycleState = HumanizeLifecycleState.ready;
+      }
     }
   }
 
   @override
   Future<SelfTestResult> runSelfTest() async {
+    if (!_isLoaded || _lifecycleState != HumanizeLifecycleState.ready) {
+      return const SelfTestResult(
+        passed: false,
+        compositionResidual: 0.0,
+        durationMs: 0,
+        message: 'Self-test aborted: No verified neural model is loaded. Real backend verification required.',
+      );
+    }
+
     const w = 64;
     const h = 64;
     final testRgba = Uint8List(w * h * 4);

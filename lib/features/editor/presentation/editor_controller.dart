@@ -96,6 +96,10 @@ class EditorController extends ChangeNotifier {
       }
 
       project = loaded;
+      final initialLayers = loaded.recipe.layerStack?.layers.skip(1).toList();
+      final initialVariantBoard = loaded.recipe.variantBoard;
+
+      layerHistoryController?.removeListener(_onLayerStackChanged);
       layerHistoryController = LayerHistoryController(
         sourceLayer: SourceLayer(
           id: 'source_layer_0',
@@ -104,7 +108,10 @@ class EditorController extends ChangeNotifier {
           sourceWidth: loaded.sourceWidth,
           sourceHeight: loaded.sourceHeight,
         ),
+        initialLayers: initialLayers,
+        initialVariantBoard: initialVariantBoard,
       );
+      layerHistoryController!.addListener(_onLayerStackChanged);
 
       // Load source image bytes
       final sourceFile = File(loaded.sourceImagePath);
@@ -259,8 +266,9 @@ class EditorController extends ChangeNotifier {
   /// Sets output render scale.
   void setRenderScale(double scale) {
     if ((renderScale - scale).abs() < 1e-4) return;
-    renderScale = scale;
+    renderScale = scale.clamp(0.1, 4.0);
     notifyListeners();
+    _dispatchRender();
   }
 
   /// Sets export file format.
@@ -303,7 +311,12 @@ class EditorController extends ChangeNotifier {
     await _dispatchRender();
   }
 
-  /// Builds the active [RenderGraph], only injecting [AdversarialStealthNode] if explicitly toggled in Stealth Studio.
+  void _onLayerStackChanged() {
+    _recordDirtyJournal();
+    _dispatchRender();
+  }
+
+  /// Builds the active [RenderGraph], composing non-destructive layers on top of base presets (Prompt B).
   RenderGraph buildActiveGraph() {
     var graph = activePreset!.buildGraph(
       project!.sourceImageHash,
@@ -311,6 +324,14 @@ class EditorController extends ChangeNotifier {
       project!.sourceHeight,
       parameterValues,
     );
+
+    // Composite non-destructive layer stack if configured (Prompt B)
+    if (layerHistoryController != null &&
+        layerHistoryController!.state.layerStack.layers.length > 1) {
+      graph = layerHistoryController!.state.layerStack.toRenderGraph(
+        baseGraph: graph,
+      );
+    }
 
     // Strict Isolation: AdversarialStealthNode cannot be injected unless explicitly toggled
     if (isStealthEnabled || isPreviewingStealth) {
@@ -376,6 +397,9 @@ class EditorController extends ChangeNotifier {
       activeStudio: 'style',
       activePresetId: activePreset!.id,
       fineTuneParameters: parameterValues,
+      layerStack: layerHistoryController?.state.layerStack,
+      variantBoard: layerHistoryController?.state.variantBoard,
+      recipeVersion: 2,
       updatedAt: DateTime.now().toUtc(),
     );
     projectRepository.writeDirtyJournal(project!.id, recipe);
@@ -446,6 +470,9 @@ class EditorController extends ChangeNotifier {
         activeStudio: 'style',
         activePresetId: activePreset!.id,
         fineTuneParameters: parameterValues,
+        layerStack: layerHistoryController?.state.layerStack,
+        variantBoard: layerHistoryController?.state.variantBoard,
+        recipeVersion: 2,
         updatedAt: DateTime.now().toUtc(),
       );
 
@@ -473,6 +500,7 @@ class EditorController extends ChangeNotifier {
 
   @override
   void dispose() {
+    layerHistoryController?.removeListener(_onLayerStackChanged);
     _jobSubscription?.cancel();
     renderJobController.dispose();
     super.dispose();

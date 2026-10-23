@@ -35,7 +35,10 @@ void main() {
     testWidgets('Renders <= 3 look choices and exactly one dominant CTA', (
       tester,
     ) async {
-      final adapter = LocalHumanizeAdapter(totalRamBytes: 12 * gb);
+      final adapter = LocalHumanizeAdapter(
+        totalRamBytes: 12 * gb,
+        isLoadedForTesting: true,
+      );
       final controller = HumanizeController(adapter: adapter);
       await controller.initialize(
         sourceImageBytes: createDummyImage(32, 32),
@@ -74,7 +77,10 @@ void main() {
     testWidgets('Selecting a look updates strength parameter appropriately', (
       tester,
     ) async {
-      final adapter = LocalHumanizeAdapter(totalRamBytes: 12 * gb);
+      final adapter = LocalHumanizeAdapter(
+        totalRamBytes: 12 * gb,
+        isLoadedForTesting: true,
+      );
       final controller = HumanizeController(adapter: adapter);
       await controller.initialize(
         sourceImageBytes: createDummyImage(32, 32),
@@ -108,7 +114,10 @@ void main() {
     testWidgets('Hold-to-compare displays ORIGINAL (BEFORE) badge', (
       tester,
     ) async {
-      final adapter = LocalHumanizeAdapter(totalRamBytes: 12 * gb);
+      final adapter = LocalHumanizeAdapter(
+        totalRamBytes: 12 * gb,
+        isLoadedForTesting: true,
+      );
       final controller = HumanizeController(adapter: adapter);
       await controller.initialize(
         sourceImageBytes: createDummyImage(32, 32),
@@ -141,7 +150,10 @@ void main() {
     testWidgets(
       'Running state displays authentic progress and cancellable operation',
       (tester) async {
-        final adapter = LocalHumanizeAdapter(totalRamBytes: 12 * gb);
+        final adapter = LocalHumanizeAdapter(
+          totalRamBytes: 12 * gb,
+          isLoadedForTesting: true,
+        );
         final controller = HumanizeController(adapter: adapter);
         await controller.initialize(
           sourceImageBytes: createDummyImage(32, 32),
@@ -220,13 +232,49 @@ void main() {
         expect(backPressed, isTrue);
       },
     );
+
+    testWidgets(
+      'Model not installed displays informative on-demand download gating card',
+      (tester) async {
+        final adapter = LocalHumanizeAdapter(
+          totalRamBytes: 12 * gb,
+          isLoadedForTesting: false, // Model not installed
+        );
+        final controller = HumanizeController(adapter: adapter);
+
+        await controller.initialize(
+          sourceImageBytes: createDummyImage(32, 32),
+          width: 32,
+          height: 32,
+        );
+
+        await tester.pumpWidget(
+          buildTestableWidget(HumanizeScreen(controller: controller)),
+        );
+        await tester.pumpAndSettle();
+
+        expect(controller.isGated, isTrue);
+        expect(controller.status, equals(HumanizeUiStatus.modelNotInstalled));
+        expect(
+          find.text('Humanize Studio Unavailable on this Device'),
+          findsOneWidget,
+        );
+        expect(
+          find.textContaining('model weights are not installed'),
+          findsOneWidget,
+        );
+      },
+    );
   });
 
   group('Responsive Layout & Accessibility Semantics', () {
     testWidgets(
       'Compact 320x640 screen with 1.3 font scale renders without RenderFlex overflow',
       (tester) async {
-        final adapter = LocalHumanizeAdapter(totalRamBytes: 12 * gb);
+        final adapter = LocalHumanizeAdapter(
+          totalRamBytes: 12 * gb,
+          isLoadedForTesting: true,
+        );
         final controller = HumanizeController(adapter: adapter);
         await controller.initialize(
           sourceImageBytes: createDummyImage(32, 32),
@@ -250,7 +298,10 @@ void main() {
     testWidgets('Controls contain accessible descriptions and tooltips', (
       tester,
     ) async {
-      final adapter = LocalHumanizeAdapter(totalRamBytes: 12 * gb);
+      final adapter = LocalHumanizeAdapter(
+        totalRamBytes: 12 * gb,
+        isLoadedForTesting: true,
+      );
       final controller = HumanizeController(adapter: adapter);
       await controller.initialize(
         sourceImageBytes: createDummyImage(32, 32),

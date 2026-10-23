@@ -3,6 +3,7 @@ import '../../../domain/presets/preset_parameter.dart';
 import '../../../domain/recipes/render_graph.dart';
 import '../../../domain/recipes/render_graph_node.dart';
 import '../../../domain/recipes/style_render_nodes.dart';
+import '../../../domain/recipes/pixelate_quantize_node.dart';
 
 /// Expanded Presets covering Categories 1 through 6 to complete the canonical 48-preset catalog.
 ///
@@ -2417,16 +2418,24 @@ class ExpandedPresets {
     id: 'pixel_art',
     displayName: 'Pixel Art',
     category: 'Experimental & Atmosphere',
-    description: 'Retro 16-bit arcade pixel rasterization simulation with quantized tone ramps and CRT phosphor grit.',
+    description: 'Retro 16-bit arcade pixel rasterization simulation with discrete block downsampling, palette quantization, and CRT phosphor grit.',
     version: 1,
     parameters: const [
       PresetParameter(
-        id: 'rasterContrast',
-        label: 'Raster Tone Contrast',
-        min: 1.2,
-        max: 2.6,
-        defaultValue: 1.85,
-        step: 0.10,
+        id: 'blockSize',
+        label: 'Pixel Block Size',
+        min: 2,
+        max: 16,
+        defaultValue: 4,
+        step: 1,
+      ),
+      PresetParameter(
+        id: 'paletteLevels',
+        label: 'Palette Color Levels',
+        min: 2,
+        max: 16,
+        defaultValue: 6,
+        step: 1,
       ),
       PresetParameter(
         id: 'phosphorGrit',
@@ -2441,8 +2450,9 @@ class ExpandedPresets {
     thumbnailProvenance: 'Synthetically generated from standard Reranger benchmark fixture via IsolateSceneMapGenerator',
     accessibleLabel: 'Pixel Art 16-bit retro arcade simulation preset',
     buildGraph: (sourceHash, sourceWidth, sourceHeight, params) {
-      final gamma = params['rasterContrast'] ?? 1.85;
-      final grit = params['phosphorGrit'] ?? 0.20;
+      final blockSize = (params['blockSize'] as num?)?.toInt() ?? 4;
+      final paletteLevels = (params['paletteLevels'] as num?)?.toInt() ?? 6;
+      final grit = (params['phosphorGrit'] as num?)?.toDouble() ?? 0.20;
 
       return RenderGraph(
         id: 'graph_pixel_art',
@@ -2453,22 +2463,17 @@ class ExpandedPresets {
             sourceWidth: sourceWidth,
             sourceHeight: sourceHeight,
           ),
-          'gray_1': GrayscaleNode(id: 'gray_1', inputNodeId: 'src_0'),
-          'sobel_2': SobelEdgeNode(
-            id: 'sobel_2',
-            inputNodeId: 'gray_1',
-            edgeThreshold: 45,
+          'pixel_1': PixelateQuantizeNode(
+            id: 'pixel_1',
+            inputNodeId: 'src_0',
+            blockSize: blockSize,
+            paletteLevels: paletteLevels,
+            preserveAlpha: true,
           ),
-          'ink_3': EdgeInvertSubtractNode(
-            id: 'ink_3',
-            grayInputNodeId: 'gray_1',
-            edgeInputNodeId: 'sobel_2',
-            edgeIntensity: 0.78,
-            contrastGamma: gamma,
-          ),
-          'duo_4': DuoToneNode(
-            id: 'duo_4',
-            inputNodeId: 'ink_3',
+          'gray_2': GrayscaleNode(id: 'gray_2', inputNodeId: 'pixel_1'),
+          'duo_3': DuoToneNode(
+            id: 'duo_3',
+            inputNodeId: 'gray_2',
             shadowR: 18,
             shadowG: 16,
             shadowB: 36,
@@ -2477,14 +2482,14 @@ class ExpandedPresets {
             highlightB: 133,
             vignetteFalloff: 0.15,
           ),
-          'grain_5': GrainOverlayNode(
-            id: 'grain_5',
-            inputNodeId: 'duo_4',
+          'grain_4': GrainOverlayNode(
+            id: 'grain_4',
+            inputNodeId: 'duo_3',
             intensity: grit,
             seed: 607,
           ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'grain_4',
       );
     },
   );

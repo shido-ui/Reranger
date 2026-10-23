@@ -1,4 +1,4 @@
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 
 import '../../../domain/color/color_palette.dart';
 import '../../../domain/color/recolor_mask.dart';
@@ -100,7 +100,7 @@ class RecolorState {
 /// - Invariant 4: Source image immutability
 /// - Invariant 7: Truthful semantic capability reporting
 /// - Mask inspection and touchscreen brush repairs
-class RecolorController {
+class RecolorController extends ChangeNotifier {
   final Uint8List sourceRgba;
   final int imageWidth;
   final int imageHeight;
@@ -122,6 +122,11 @@ class RecolorController {
   }
 
   RecolorState get state => _state;
+
+  void _updateState(RecolorState next) {
+    _state = next;
+    notifyListeners();
+  }
 
   void _initialize({
     ColorPalette? initialPalette,
@@ -214,33 +219,39 @@ class RecolorController {
       feather: _state.feather,
     );
 
-    _state = _state.copyWith(
-      selectedColorIndex: index,
-      targetColor: suggestions.length > 1 ? suggestions[1] : null,
-      harmonicSuggestions: suggestions,
-      activeMask: newMask,
-      canUndo: _undoStack.isNotEmpty,
-      canRedo: false,
+    _updateState(
+      _state.copyWith(
+        selectedColorIndex: index,
+        targetColor: suggestions.length > 1 ? suggestions[1] : null,
+        harmonicSuggestions: suggestions,
+        activeMask: newMask,
+        canUndo: _undoStack.isNotEmpty,
+        canRedo: false,
+      ),
     );
   }
 
   /// Sets the target replacement color.
   void setTargetColor(ColorRgb color) {
     _recordUndo();
-    _state = _state.copyWith(
-      targetColor: color,
-      canUndo: _undoStack.isNotEmpty,
-      canRedo: false,
+    _updateState(
+      _state.copyWith(
+        targetColor: color,
+        canUndo: _undoStack.isNotEmpty,
+        canRedo: false,
+      ),
     );
   }
 
   /// Updates transformation strength in [0.0, 1.0].
   void setStrength(double strength) {
     _recordUndo();
-    _state = _state.copyWith(
-      strength: strength.clamp(0.0, 1.0),
-      canUndo: _undoStack.isNotEmpty,
-      canRedo: false,
+    _updateState(
+      _state.copyWith(
+        strength: strength.clamp(0.0, 1.0),
+        canUndo: _undoStack.isNotEmpty,
+        canRedo: false,
+      ),
     );
   }
 
@@ -261,11 +272,13 @@ class RecolorController {
       );
     }
 
-    _state = _state.copyWith(
-      tolerance: tol,
-      activeMask: updatedMask,
-      canUndo: _undoStack.isNotEmpty,
-      canRedo: false,
+    _updateState(
+      _state.copyWith(
+        tolerance: tol,
+        activeMask: updatedMask,
+        canUndo: _undoStack.isNotEmpty,
+        canRedo: false,
+      ),
     );
   }
 
@@ -286,32 +299,38 @@ class RecolorController {
       );
     }
 
-    _state = _state.copyWith(
-      feather: f,
-      activeMask: updatedMask,
-      canUndo: _undoStack.isNotEmpty,
-      canRedo: false,
+    _updateState(
+      _state.copyWith(
+        feather: f,
+        activeMask: updatedMask,
+        canUndo: _undoStack.isNotEmpty,
+        canRedo: false,
+      ),
     );
   }
 
   /// Toggles luminance preservation mode.
   void togglePreserveLuminance() {
     _recordUndo();
-    _state = _state.copyWith(
-      preserveLuminance: !_state.preserveLuminance,
-      canUndo: _undoStack.isNotEmpty,
-      canRedo: false,
+    _updateState(
+      _state.copyWith(
+        preserveLuminance: !_state.preserveLuminance,
+        canUndo: _undoStack.isNotEmpty,
+        canRedo: false,
+      ),
     );
   }
 
   /// Toggles ruby-red mask overlay visibility in viewport.
   void toggleMaskPreview() {
-    _state = _state.copyWith(isMaskPreviewActive: !_state.isMaskPreviewActive);
+    _updateState(
+      _state.copyWith(isMaskPreviewActive: !_state.isMaskPreviewActive),
+    );
   }
 
   /// Sets before/after comparison state.
   void setComparing(bool isComparing) {
-    _state = _state.copyWith(isComparing: isComparing);
+    _updateState(_state.copyWith(isComparing: isComparing));
   }
 
   /// Applies mobile brush repair stroke to the active mask.
@@ -334,10 +353,12 @@ class RecolorController {
       isEraser: isEraser,
     );
 
-    _state = _state.copyWith(
-      activeMask: maskCopy,
-      canUndo: _undoStack.isNotEmpty,
-      canRedo: false,
+    _updateState(
+      _state.copyWith(
+        activeMask: maskCopy,
+        canUndo: _undoStack.isNotEmpty,
+        canRedo: false,
+      ),
     );
   }
 
@@ -347,10 +368,12 @@ class RecolorController {
     _recordUndo();
 
     final inverted = _state.activeMask!.invert();
-    _state = _state.copyWith(
-      activeMask: inverted,
-      canUndo: _undoStack.isNotEmpty,
-      canRedo: false,
+    _updateState(
+      _state.copyWith(
+        activeMask: inverted,
+        canUndo: _undoStack.isNotEmpty,
+        canRedo: false,
+      ),
     );
   }
 
@@ -360,10 +383,12 @@ class RecolorController {
     _recordUndo();
 
     final smoothed = _state.activeMask!.featherMask(radius);
-    _state = _state.copyWith(
-      activeMask: smoothed,
-      canUndo: _undoStack.isNotEmpty,
-      canRedo: false,
+    _updateState(
+      _state.copyWith(
+        activeMask: smoothed,
+        canUndo: _undoStack.isNotEmpty,
+        canRedo: false,
+      ),
     );
   }
 
@@ -372,7 +397,9 @@ class RecolorController {
     if (_undoStack.isEmpty) return;
     _redoStack.add(_state);
     final previous = _undoStack.removeLast();
-    _state = previous.copyWith(canUndo: _undoStack.isNotEmpty, canRedo: true);
+    _updateState(
+      previous.copyWith(canUndo: _undoStack.isNotEmpty, canRedo: true),
+    );
   }
 
   /// Re-applies next action.
@@ -380,7 +407,7 @@ class RecolorController {
     if (_redoStack.isEmpty) return;
     _undoStack.add(_state);
     final next = _redoStack.removeLast();
-    _state = next.copyWith(canUndo: true, canRedo: _redoStack.isNotEmpty);
+    _updateState(next.copyWith(canUndo: true, canRedo: _redoStack.isNotEmpty));
   }
 
   /// Resets all edits to original unmodified state.
@@ -401,18 +428,20 @@ class RecolorController {
       feather: 0.10,
     );
 
-    _state = _state.copyWith(
-      selectedColorIndex: 0,
-      clearTargetColor: true, // Clears recolor transformation
-      strength: 1.0,
-      tolerance: 0.20,
-      feather: 0.10,
-      preserveLuminance: true,
-      activeMask: initialMask,
-      isMaskPreviewActive: false,
-      isComparing: false,
-      canUndo: _undoStack.isNotEmpty,
-      canRedo: false,
+    _updateState(
+      _state.copyWith(
+        selectedColorIndex: 0,
+        clearTargetColor: true, // Clears recolor transformation
+        strength: 1.0,
+        tolerance: 0.20,
+        feather: 0.10,
+        preserveLuminance: true,
+        activeMask: initialMask,
+        isMaskPreviewActive: false,
+        isComparing: false,
+        canUndo: _undoStack.isNotEmpty,
+        canRedo: false,
+      ),
     );
   }
 
