@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/local/local_project_repository.dart';
 import '../../../data/local/project_database.dart';
 import '../../../data/local/project_file_storage.dart';
+import '../../../data/platform/platform_photo_picker_service.dart';
+import '../../../domain/import/image_picker_service.dart';
 import 'import_controller.dart';
 
 /// Provider for app-private sandbox directory.
@@ -38,13 +40,20 @@ final projectRepositoryProvider = Provider<LocalProjectRepository>((ref) {
   return LocalProjectRepository(database: db, fileStorage: storage);
 });
 
+/// Provider for the platform photo picker service.
+final imagePickerServiceProvider = Provider<ImagePickerService>((ref) {
+  return const PlatformPhotoPickerService();
+});
+
 /// Provider for the import controller.
 final importControllerProvider = Provider<ImportController>((ref) {
   final repo = ref.watch(projectRepositoryProvider);
   final storage = ref.watch(projectFileStorageProvider);
+  final picker = ref.watch(imagePickerServiceProvider);
   final controller = ImportController(
     projectRepository: repo,
     fileStorage: storage,
+    pickerService: picker,
   );
   ref.onDispose(() => controller.dispose());
   return controller;

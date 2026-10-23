@@ -59,72 +59,78 @@ class HomeScreen extends StatelessWidget {
               Expanded(
                 child: Center(
                   child: SingleChildScrollView(
-                    child: Container(
-                      constraints: const BoxConstraints(maxWidth: 480),
-                      padding: const EdgeInsets.all(AppSpacingTokens.lg),
-                      decoration: BoxDecoration(
-                        color: surfaceElevated,
-                        borderRadius: AppRadiusTokens.borderLg,
-                        border: Border.all(color: borderSubtle),
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.auto_awesome_mosaic_outlined,
-                            size: 64,
-                            color: accentColor,
-                          ),
-                          const SizedBox(height: AppSpacingTokens.md),
-                          Text(
-                            '100% On-Device Photo Studio',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              color: primaryText,
-                              fontWeight: FontWeight.w700,
+                    child: InkWell(
+                      borderRadius: AppRadiusTokens.borderLg,
+                      onTap: () {
+                        context.push(AppRouteNames.analysis);
+                      },
+                      child: Container(
+                        constraints: const BoxConstraints(maxWidth: 480),
+                        padding: const EdgeInsets.all(AppSpacingTokens.lg),
+                        decoration: BoxDecoration(
+                          color: surfaceElevated,
+                          borderRadius: AppRadiusTokens.borderLg,
+                          border: Border.all(color: borderSubtle),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.auto_awesome_mosaic_outlined,
+                              size: 64,
+                              color: accentColor,
                             ),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: AppSpacingTokens.xs),
-                          Text(
-                            'Non-destructive recoloring, stylistic rendering, and neural refinement. Your original media is never modified.',
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: secondaryText,
+                            const SizedBox(height: AppSpacingTokens.md),
+                            Text(
+                              '100% On-Device Photo Studio',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                color: primaryText,
+                                fontWeight: FontWeight.w700,
+                              ),
+                              textAlign: TextAlign.center,
                             ),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: AppSpacingTokens.md),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacingTokens.sm,
-                              vertical: AppSpacingTokens.xs,
+                            const SizedBox(height: AppSpacingTokens.xs),
+                            Text(
+                              'Non-destructive recoloring, stylistic rendering, and neural refinement. Your original media is never modified.',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: secondaryText,
+                              ),
+                              textAlign: TextAlign.center,
                             ),
-                            decoration: BoxDecoration(
-                              color: accentColor.withValues(alpha: 0.15),
-                              borderRadius: AppRadiusTokens.borderSm,
-                            ),
-                            child: Wrap(
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              alignment: WrapAlignment.center,
-                              spacing: AppSpacingTokens.xs,
-                              runSpacing: AppSpacingTokens.xs,
-                              children: [
-                                Icon(
-                                  Icons.shield_outlined,
-                                  size: 16,
-                                  color: accentColor,
-                                ),
-                                Text(
-                                  'Offline • Zero Cloud Telemetry',
-                                  style: theme.textTheme.labelSmall?.copyWith(
+                            const SizedBox(height: AppSpacingTokens.md),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: AppSpacingTokens.sm,
+                                vertical: AppSpacingTokens.xs,
+                              ),
+                              decoration: BoxDecoration(
+                                color: accentColor.withValues(alpha: 0.15),
+                                borderRadius: AppRadiusTokens.borderSm,
+                              ),
+                              child: Wrap(
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                alignment: WrapAlignment.center,
+                                spacing: AppSpacingTokens.xs,
+                                runSpacing: AppSpacingTokens.xs,
+                                children: [
+                                  Icon(
+                                    Icons.shield_outlined,
+                                    size: 16,
                                     color: accentColor,
-                                    fontWeight: FontWeight.w600,
                                   ),
-                                  textAlign: TextAlign.center,
-                                ),
-                              ],
+                                  Text(
+                                    'Offline • Zero Cloud Telemetry',
+                                    style: theme.textTheme.labelSmall?.copyWith(
+                                      color: accentColor,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),

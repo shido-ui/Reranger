@@ -6,6 +6,7 @@ import '../../features/creations/presentation/creations_screen.dart';
 import '../../features/editor/presentation/editor_screen.dart';
 import '../../features/home/presentation/home_screen.dart';
 import '../../features/import/presentation/analysis_screen.dart';
+import '../../features/import/presentation/import_controller.dart';
 import '../../features/import/presentation/import_providers.dart';
 import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/shell/presentation/main_shell_screen.dart';
@@ -53,6 +54,10 @@ final GoRouter appRouter = GoRouter(
         return Consumer(
           builder: (context, ref, _) {
             final controller = ref.watch(importControllerProvider);
+            if (controller.state is ImportSuccess ||
+                controller.state is ImportCancelled) {
+              controller.reset();
+            }
             return AnalysisScreen(controller: controller);
           },
         );

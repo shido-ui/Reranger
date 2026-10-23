@@ -139,6 +139,14 @@ class ImportController extends ChangeNotifier {
     _setState(const ImportCancelled());
   }
 
+  /// Resets the controller back to initial state for a fresh intake session.
+  void reset() {
+    _isCancelled = false;
+    _isExecuting = false;
+    _lastSourcePath = null;
+    _setState(const ImportInitial());
+  }
+
   /// Retries the last failed import job.
   Future<void> retry() async {
     if (_lastSourcePath != null) {

@@ -246,12 +246,32 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                             ),
                           ),
                           const SizedBox(height: AppSpacingTokens.md),
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              minimumSize: const Size(160, 48),
-                            ),
-                            onPressed: () => _navigateHome(context),
-                            child: const Text('Return to Home'),
+                          Wrap(
+                            alignment: WrapAlignment.center,
+                            spacing: AppSpacingTokens.sm,
+                            runSpacing: AppSpacingTokens.sm,
+                            children: [
+                              OutlinedButton(
+                                style: OutlinedButton.styleFrom(
+                                  minimumSize: const Size(140, 48),
+                                ),
+                                onPressed: () => _navigateHome(context),
+                                child: const Text('Return to Home'),
+                              ),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  minimumSize: const Size(150, 48),
+                                ),
+                                icon: const Icon(
+                                  Icons.add_photo_alternate_outlined,
+                                ),
+                                label: const Text('Select Image'),
+                                onPressed: () {
+                                  widget.controller.reset();
+                                  widget.controller.pickAndImport();
+                                },
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -292,6 +312,18 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                             style: theme.textTheme.bodyMedium?.copyWith(
                               color: secondaryText,
                             ),
+                          ),
+                          const SizedBox(height: AppSpacingTokens.md),
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.photo_library_outlined),
+                            label: const Text('Open Gallery'),
+                            onPressed: () {
+                              if (!widget.controller.isExecuting &&
+                                  widget.controller.pickerService != null) {
+                                widget.controller.reset();
+                                widget.controller.pickAndImport();
+                              }
+                            },
                           ),
                           const SizedBox(height: AppSpacingTokens.md),
                           Container(
