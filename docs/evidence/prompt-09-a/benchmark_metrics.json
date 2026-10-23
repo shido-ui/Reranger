@@ -1,0 +1,302 @@
+{
+  "timestamp": "2026-10-22T18:14:07.770115",
+  "runs": [
+    {
+      "fixture_id": "ANIME-01-PORTRAIT",
+      "title": "Anime Portrait with Expressive Eyes & Eyelashes",
+      "category": "Portrait",
+      "source_sha256": "97a4d6bfac972681ba37756e5093726c013438aabf32239cfbe236181a25b8ab",
+      "metrics": {
+        "classical": {
+          "mae": 0.009460030350030638,
+          "time_ms": 59,
+          "sha256": "d523e8faaa39eb5f110ea0c4401d1895877f6c95fc1e95a8330d5dd722d1bda6"
+        },
+        "generic_sd_str020": {
+          "mae": 0.05332753299887663,
+          "time_ms": 46,
+          "sha256": "972737130b5867d86e233aef918a983280e6745509597c3dddc03339b8e92112"
+        },
+        "generic_sd_str045": {
+          "mae": 0.05711939194623162,
+          "time_ms": 43,
+          "sha256": "5da0e01bf31fa97a2540a90ca30fa45246b791015fb0e55e152cd773d674ca14"
+        },
+        "anime_tuned_str020": {
+          "mae": 0.05193140366498162,
+          "time_ms": 39,
+          "sha256": "749a44063311db322a53d3d95f4c88c8e1e5c55db63575d8aa2f1e8a749680b7"
+        },
+        "anime_tuned_str045": {
+          "mae": 0.05491797752629698,
+          "time_ms": 99,
+          "sha256": "57fdce73e0ea2200defc56af51162b37c474cc05f91920cc58d163c3325d54b8"
+        }
+      }
+    },
+    {
+      "fixture_id": "ANIME-02-HAIR",
+      "title": "Detailed Hair Strands & Angel-Ring Specular Sheen",
+      "category": "Hair & Specular",
+      "source_sha256": "15e2bb026505897f11cca33a8844c31fdca93c8b6bb2133dc0ce0f25c745e5a0",
+      "metrics": {
+        "classical": {
+          "mae": 0.05480703715405433,
+          "time_ms": 108,
+          "sha256": "3b75c2f8e071fdfecf4af48eed8b79ba7f83571c0f8a216a91a019635a95d88b"
+        },
+        "generic_sd_str020": {
+          "mae": 0.06285994785283905,
+          "time_ms": 11,
+          "sha256": "1b91a38b6569e4b53fd4bfe19c4c25f6b7c721c81b40d7ccc9c41a067256998e"
+        },
+        "generic_sd_str045": {
+          "mae": 0.08939801384420956,
+          "time_ms": 11,
+          "sha256": "20609e16b61dc5d9beda6bf6835f51b15c1073cb17752d7439bd0265dd4fe9ff"
+        },
+        "anime_tuned_str020": {
+          "mae": 0.06625978557112949,
+          "time_ms": 10,
+          "sha256": "2e378d1d21d7f78b41a26b159a04ad0b300b2f2ab2501535ae3d0c2ff26ffa7f"
+        },
+        "anime_tuned_str045": {
+          "mae": 0.0937225341796875,
+          "time_ms": 11,
+          "sha256": "1d9f4ae6abc53787e3b7a622d9d48ff30070bb6543b451b7645c408f98a835e9"
+        }
+      }
+    },
+    {
+      "fixture_id": "ANIME-03-CELSHADE",
+      "title": "Flat-Color Cel-Shaded Illustration",
+      "category": "Cel Shading",
+      "source_sha256": "6ef66acb3d3855506ab56ec76cf71ab549ddfe00b783e2ccf58ce08f051b3b69",
+      "metrics": {
+        "classical": {
+          "mae": 0.0036267049951491013,
+          "time_ms": 11,
+          "sha256": "632ca218d31f9151ea9f0c770809deb3789a2541ec883daa4bd018467ec8b203"
+        },
+        "generic_sd_str020": {
+          "mae": 0.06306984097349877,
+          "time_ms": 11,
+          "sha256": "83e3c586a8dc8d7c59602e71c16c76932ad2fc6d80467535bb608fd37bb97749"
+        },
+        "generic_sd_str045": {
+          "mae": 0.0726999120774612,
+          "time_ms": 8,
+          "sha256": "2767949c0f7b2d4e3c5b415f426d7d8a856ba4585a52ea54eb58c7f484df3599"
+        },
+        "anime_tuned_str020": {
+          "mae": 0.06188151041666667,
+          "time_ms": 11,
+          "sha256": "1aab93fb5ba3323758c196c8021bc0c55700e0737b9113cf729e52eac1693840"
+        },
+        "anime_tuned_str045": {
+          "mae": 0.07058763691023284,
+          "time_ms": 10,
+          "sha256": "ab347cebd9e3ff40647d78f0127579e7e7d0252b1e9c3a600af710ba4a861556"
+        }
+      }
+    },
+    {
+      "fixture_id": "ANIME-04-INT_LINE",
+      "title": "Intricate Manga Line Art & Cross-Hatching",
+      "category": "Line Art",
+      "source_sha256": "d0379413bfc746560ae42eee8ecba104ae31c29ba06653b6ca57dca32eb65b56",
+      "metrics": {
+        "classical": {
+          "mae": 0.09527091232000613,
+          "time_ms": 8,
+          "sha256": "166dd451eef62c66c48130f3f13f3b6ef09fbc75d09826d8628a4a1d1092afe7"
+        },
+        "generic_sd_str020": {
+          "mae": 0.001919775071486928,
+          "time_ms": 8,
+          "sha256": "fca4222a36dc4096bcd1e50edf4395f78cf82424b01bf7ea5b28f69eb7f2d211"
+        },
+        "generic_sd_str045": {
+          "mae": 0.002936050315308415,
+          "time_ms": 8,
+          "sha256": "1fb0ca0c9afcd1c5fc9a37f3cc2e3384bb91e41b9c4ca23cfe14ed3c06f63311"
+        },
+        "anime_tuned_str020": {
+          "mae": 0.001860754474315768,
+          "time_ms": 11,
+          "sha256": "76fd3c3904a0a2ed5dd50a1ff9595b6d489d5dc1c6bc356ceb837e92d5ce038e"
+        },
+        "anime_tuned_str045": {
+          "mae": 0.0027944726881638073,
+          "time_ms": 12,
+          "sha256": "0f0beb0162eeea03c6e49e61680374633501dff6b5ab5208f7c46d2863080f4f"
+        }
+      }
+    },
+    {
+      "fixture_id": "ANIME-05-FULLBODY",
+      "title": "Full-Body Character with Fabric Folds & Uniform",
+      "category": "Full Body & Drapery",
+      "source_sha256": "3abf54769cd39d678da06b7f3b8b961f6a27cf68bebba06e124524d9272b77ee",
+      "metrics": {
+        "classical": {
+          "mae": 0.005510457356770833,
+          "time_ms": 8,
+          "sha256": "5e5052e001621966b810d5c9239fa444c6dee1611534a43e8c6254bb19df750a"
+        },
+        "generic_sd_str020": {
+          "mae": 0.061297388014450574,
+          "time_ms": 8,
+          "sha256": "821a8fb82cf62f03a656a7397672d2dc6b98d7890df055b52c6cf3bbccd54d2c"
+        },
+        "generic_sd_str045": {
+          "mae": 0.06491599488102533,
+          "time_ms": 8,
+          "sha256": "3b3f1105bd8ff592a83ce423b84e640eec9270869aed0b95d2df8a3f434cac32"
+        },
+        "anime_tuned_str020": {
+          "mae": 0.05931103276271446,
+          "time_ms": 9,
+          "sha256": "28c124779b9bd6e77101ccbdd2f687111cb84e05d32b051bb2dc1191dbd64e10"
+        },
+        "anime_tuned_str045": {
+          "mae": 0.061631705090890526,
+          "time_ms": 10,
+          "sha256": "d18ccb72066fe5b953216c9b7cf5823ca416d74fb046387160886c014ac69656"
+        }
+      }
+    },
+    {
+      "fixture_id": "ANIME-06-HANDS",
+      "title": "Foreground Anime Hand & Finger Anatomy",
+      "category": "Anatomy & Hands",
+      "source_sha256": "88cd792fbcc478931de72068ce98b933479efd921bba8dcaaf63c66c4a3735be",
+      "metrics": {
+        "classical": {
+          "mae": 0.004079601811427696,
+          "time_ms": 8,
+          "sha256": "eb52b3158ade9ed8d6fb3ce6e6e2c8a8f67fe55c00afe3a3a438d7af408ac776"
+        },
+        "generic_sd_str020": {
+          "mae": 0.06036548489838644,
+          "time_ms": 8,
+          "sha256": "efcca1772feec7eadbe3059cc9e743767512d3c01c61d2e6ae2985afd89e8e2e"
+        },
+        "generic_sd_str045": {
+          "mae": 0.06160557566125408,
+          "time_ms": 8,
+          "sha256": "fc3a83a9dc8c51c27d27003eaa1d3910f410ef6d32dede0be4ff86bec90aa190"
+        },
+        "anime_tuned_str020": {
+          "mae": 0.05988550123825572,
+          "time_ms": 10,
+          "sha256": "6d8954489bf5d41cac0a3e436be812f067892d2c7c82ef3d03dd6d4f283df8ca"
+        },
+        "anime_tuned_str045": {
+          "mae": 0.06105596006306168,
+          "time_ms": 10,
+          "sha256": "64c1b8076a94aaf63cddd671d4862c01c42611abde855b0661cf953efce19160"
+        }
+      }
+    },
+    {
+      "fixture_id": "ANIME-07-BACKGROUND",
+      "title": "Anime Character with Detailed Sky & Architecture",
+      "category": "Composition & Environment",
+      "source_sha256": "261531c9705332d8bc84657d3cee49de2a704b2cfc83c4ed2a001a9b5fa084c8",
+      "metrics": {
+        "classical": {
+          "mae": 0.01190426895041871,
+          "time_ms": 8,
+          "sha256": "0c31f642de2ea422b8a1cf3f19aca3f6245443d14957692ad0b1cdc293af8368"
+        },
+        "generic_sd_str020": {
+          "mae": 0.047095045700571894,
+          "time_ms": 8,
+          "sha256": "15e7e843c9fdafa90b3a1e1b36216be63d3b35ca99905ddb5426c1c845e055e0"
+        },
+        "generic_sd_str045": {
+          "mae": 0.07024921093111725,
+          "time_ms": 8,
+          "sha256": "4509e7831885749ad38f7209b1c4048202f8e1c40a8f128222617197d763d45c"
+        },
+        "anime_tuned_str020": {
+          "mae": 0.048245199365553514,
+          "time_ms": 8,
+          "sha256": "6eb886bd3340a7b65f392390af790c1ca08f11fb3dc5e2e21b9e9025a9340fcf"
+        },
+        "anime_tuned_str045": {
+          "mae": 0.06947432374642565,
+          "time_ms": 9,
+          "sha256": "ba9ae966f67042289cd5ad89ca0c24a82af54a9e230c7caed752a475177f4f33"
+        }
+      }
+    },
+    {
+      "fixture_id": "ANIME-08-RETRO",
+      "title": "90s Vintage Mecha/Cyberpunk Anime Cel",
+      "category": "Retro Aesthetic",
+      "source_sha256": "c782e06ca64b5d6e56809a5eb2c657f0134c1591acb092e7834db83ac6a69fd4",
+      "metrics": {
+        "classical": {
+          "mae": 0.0066090702231413395,
+          "time_ms": 8,
+          "sha256": "d797233f723f0dbb0c2cf81ebc46023bb3e44096acca90ffc3f8da027226230d"
+        },
+        "generic_sd_str020": {
+          "mae": 0.11756494060840482,
+          "time_ms": 8,
+          "sha256": "1e7109ca5999198c0eff51d9ec8c8dc569e930319605c7d0ffb142b996f86dd2"
+        },
+        "generic_sd_str045": {
+          "mae": 0.17057052313112744,
+          "time_ms": 10,
+          "sha256": "b01e65e74aa2646231ef0e71dc31dc79210e339eef02a0cac70f4603e23a44ca"
+        },
+        "anime_tuned_str020": {
+          "mae": 0.11781277126736112,
+          "time_ms": 10,
+          "sha256": "4e8864ff163dd118bc71a01064fbef90068629324fcddba3dd4aa250a88b7ff8"
+        },
+        "anime_tuned_str045": {
+          "mae": 0.16749010273054535,
+          "time_ms": 10,
+          "sha256": "ec5c799a9d9595e0b91957ed8d7718cb49b58ce37474e21e54331a30506ce9d0"
+        }
+      }
+    },
+    {
+      "fixture_id": "ANIME-REF-HUMAN-01",
+      "title": "Human-Drawn Anime Reference Illustration",
+      "category": "Human Reference",
+      "source_sha256": "f1a8b586f505e0b079353e549de20ee15d3492b6484e85a261ad85f918eb477a",
+      "metrics": {
+        "classical": {
+          "mae": 0.009772047653696896,
+          "time_ms": 8,
+          "sha256": "0792aa17a221d0710439100dea9d592dcb5bc9d039f242c0d26472a0e0e2226c"
+        },
+        "generic_sd_str020": {
+          "mae": 0.046157178691789216,
+          "time_ms": 8,
+          "sha256": "e156eba9ee516f6a8051d605e52f525702a33667ec6e2e7e198580d8efe87835"
+        },
+        "generic_sd_str045": {
+          "mae": 0.04762076583563113,
+          "time_ms": 8,
+          "sha256": "3b8dd125ad798792660f8e143236942be1d25c2d21b305da6fc576d8a72b4447"
+        },
+        "anime_tuned_str020": {
+          "mae": 0.04558005738102533,
+          "time_ms": 10,
+          "sha256": "7c98b3b6303a06e27cb6e00fd4dcc1d3761b65907e5f3672ec32ea46dce53bb1"
+        },
+        "anime_tuned_str045": {
+          "mae": 0.04705555236417484,
+          "time_ms": 10,
+          "sha256": "32473255d0259ab89c5bce52958087dd1ea4675a3a6a05dfac435acb1e179641"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "device_id": "57281FDCR004MW",
+  "device_model": "Google Pixel 10",
+  "platform": "android",
+  "type": "real (physical cloud device)",
+  "android_version": "16",
+  "api_level": 36,
+  "abi": "arm64-v8a",
+  "screen_resolution": "1080 x 2424",
+  "battery_state": "100%, charging",
+  "foreground_activity": "com.google.android.apps.nexuslauncher.NexusLauncherActivity",
+  "provider": "mobilenext",
+  "allocation_id": "2925cad5-1d11-496a-8716-0ee0d9e8c063",
+  "session_id": "6bb98c17-038c-4075-9083-a44e906dc2a4"
+}

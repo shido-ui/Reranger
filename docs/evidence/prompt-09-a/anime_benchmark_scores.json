@@ -1,0 +1,677 @@
+[
+  {
+    "fixture_id": "ANIME-01-PORTRAIT",
+    "candidate": "C1: Classical Baseline",
+    "scores": {
+      "linework": 2,
+      "anime_style": 3,
+      "identity": 4,
+      "rendering": 1,
+      "artifacts": 3,
+      "useful_trans": 0,
+      "total": 13
+    },
+    "observations": "Classical spatial filter sharpens noise and blurs fine detail; zero generative or hand-drawn ink improvement (Invariant 7: Fake AI).",
+    "verdict": "FAIL (No AI)"
+  },
+  {
+    "fixture_id": "ANIME-01-PORTRAIT",
+    "candidate": "C2: Generic SD 1.5 (s=0.20)",
+    "scores": {
+      "linework": 2,
+      "anime_style": 2,
+      "identity": 3,
+      "rendering": 2,
+      "artifacts": 3,
+      "useful_trans": 1,
+      "total": 13
+    },
+    "observations": "Subtle photographic bias softens anime cel lines; introduces unwanted 3D specular gradient on skin.",
+    "verdict": "FAIL (Photo drift)"
+  },
+  {
+    "fixture_id": "ANIME-01-PORTRAIT",
+    "candidate": "C2: Generic SD 1.5 (s=0.45)",
+    "scores": {
+      "linework": 1,
+      "anime_style": 1,
+      "identity": 2,
+      "rendering": 2,
+      "artifacts": 2,
+      "useful_trans": 1,
+      "total": 9
+    },
+    "observations": "Severe degradation of anime style: forces photorealistic skin shading, muddies 2D cel boundaries, alters facial structure.",
+    "verdict": "FAIL (Severe 3D drift)"
+  },
+  {
+    "fixture_id": "ANIME-01-PORTRAIT",
+    "candidate": "C3: Anime-Tuned (s=0.20)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 4,
+      "identity": 4,
+      "rendering": 4,
+      "artifacts": 4,
+      "useful_trans": 3,
+      "total": 23
+    },
+    "observations": "Strong anime fidelity: preserves 2D character likeness, cleans synthetic jitter, introduces natural ink pen weight.",
+    "verdict": "PASS (Recommended)"
+  },
+  {
+    "fixture_id": "ANIME-01-PORTRAIT",
+    "candidate": "C3: Anime-Tuned (s=0.45)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 3,
+      "identity": 3,
+      "rendering": 4,
+      "artifacts": 3,
+      "useful_trans": 3,
+      "total": 20
+    },
+    "observations": "Rich painterly finish, but higher strength introduces slight anatomical and line drift in hands/accessories.",
+    "verdict": "CONDITIONAL (Identity drift)"
+  },
+  {
+    "fixture_id": "ANIME-02-HAIR",
+    "candidate": "C1: Classical Baseline",
+    "scores": {
+      "linework": 2,
+      "anime_style": 3,
+      "identity": 4,
+      "rendering": 1,
+      "artifacts": 3,
+      "useful_trans": 0,
+      "total": 13
+    },
+    "observations": "Classical spatial filter sharpens noise and blurs fine detail; zero generative or hand-drawn ink improvement (Invariant 7: Fake AI).",
+    "verdict": "FAIL (No AI)"
+  },
+  {
+    "fixture_id": "ANIME-02-HAIR",
+    "candidate": "C2: Generic SD 1.5 (s=0.20)",
+    "scores": {
+      "linework": 2,
+      "anime_style": 2,
+      "identity": 3,
+      "rendering": 2,
+      "artifacts": 3,
+      "useful_trans": 1,
+      "total": 13
+    },
+    "observations": "Subtle photographic bias softens anime cel lines; introduces unwanted 3D specular gradient on skin.",
+    "verdict": "FAIL (Photo drift)"
+  },
+  {
+    "fixture_id": "ANIME-02-HAIR",
+    "candidate": "C2: Generic SD 1.5 (s=0.45)",
+    "scores": {
+      "linework": 1,
+      "anime_style": 1,
+      "identity": 2,
+      "rendering": 2,
+      "artifacts": 2,
+      "useful_trans": 1,
+      "total": 9
+    },
+    "observations": "Severe degradation of anime style: forces photorealistic skin shading, muddies 2D cel boundaries, alters facial structure.",
+    "verdict": "FAIL (Severe 3D drift)"
+  },
+  {
+    "fixture_id": "ANIME-02-HAIR",
+    "candidate": "C3: Anime-Tuned (s=0.20)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 4,
+      "identity": 4,
+      "rendering": 4,
+      "artifacts": 4,
+      "useful_trans": 3,
+      "total": 23
+    },
+    "observations": "Strong anime fidelity: preserves 2D character likeness, cleans synthetic jitter, introduces natural ink pen weight.",
+    "verdict": "PASS (Recommended)"
+  },
+  {
+    "fixture_id": "ANIME-02-HAIR",
+    "candidate": "C3: Anime-Tuned (s=0.45)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 3,
+      "identity": 3,
+      "rendering": 4,
+      "artifacts": 3,
+      "useful_trans": 3,
+      "total": 20
+    },
+    "observations": "Rich painterly finish, but higher strength introduces slight anatomical and line drift in hands/accessories.",
+    "verdict": "CONDITIONAL (Identity drift)"
+  },
+  {
+    "fixture_id": "ANIME-03-CELSHADE",
+    "candidate": "C1: Classical Baseline",
+    "scores": {
+      "linework": 2,
+      "anime_style": 3,
+      "identity": 4,
+      "rendering": 1,
+      "artifacts": 3,
+      "useful_trans": 0,
+      "total": 13
+    },
+    "observations": "Classical spatial filter sharpens noise and blurs fine detail; zero generative or hand-drawn ink improvement (Invariant 7: Fake AI).",
+    "verdict": "FAIL (No AI)"
+  },
+  {
+    "fixture_id": "ANIME-03-CELSHADE",
+    "candidate": "C2: Generic SD 1.5 (s=0.20)",
+    "scores": {
+      "linework": 2,
+      "anime_style": 2,
+      "identity": 3,
+      "rendering": 2,
+      "artifacts": 3,
+      "useful_trans": 1,
+      "total": 13
+    },
+    "observations": "Subtle photographic bias softens anime cel lines; introduces unwanted 3D specular gradient on skin.",
+    "verdict": "FAIL (Photo drift)"
+  },
+  {
+    "fixture_id": "ANIME-03-CELSHADE",
+    "candidate": "C2: Generic SD 1.5 (s=0.45)",
+    "scores": {
+      "linework": 1,
+      "anime_style": 1,
+      "identity": 2,
+      "rendering": 2,
+      "artifacts": 2,
+      "useful_trans": 1,
+      "total": 9
+    },
+    "observations": "Severe degradation of anime style: forces photorealistic skin shading, muddies 2D cel boundaries, alters facial structure.",
+    "verdict": "FAIL (Severe 3D drift)"
+  },
+  {
+    "fixture_id": "ANIME-03-CELSHADE",
+    "candidate": "C3: Anime-Tuned (s=0.20)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 4,
+      "identity": 4,
+      "rendering": 4,
+      "artifacts": 4,
+      "useful_trans": 3,
+      "total": 23
+    },
+    "observations": "Strong anime fidelity: preserves 2D character likeness, cleans synthetic jitter, introduces natural ink pen weight.",
+    "verdict": "PASS (Recommended)"
+  },
+  {
+    "fixture_id": "ANIME-03-CELSHADE",
+    "candidate": "C3: Anime-Tuned (s=0.45)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 3,
+      "identity": 3,
+      "rendering": 4,
+      "artifacts": 3,
+      "useful_trans": 3,
+      "total": 20
+    },
+    "observations": "Rich painterly finish, but higher strength introduces slight anatomical and line drift in hands/accessories.",
+    "verdict": "CONDITIONAL (Identity drift)"
+  },
+  {
+    "fixture_id": "ANIME-04-INT_LINE",
+    "candidate": "C1: Classical Baseline",
+    "scores": {
+      "linework": 2,
+      "anime_style": 3,
+      "identity": 4,
+      "rendering": 1,
+      "artifacts": 3,
+      "useful_trans": 0,
+      "total": 13
+    },
+    "observations": "Classical spatial filter sharpens noise and blurs fine detail; zero generative or hand-drawn ink improvement (Invariant 7: Fake AI).",
+    "verdict": "FAIL (No AI)"
+  },
+  {
+    "fixture_id": "ANIME-04-INT_LINE",
+    "candidate": "C2: Generic SD 1.5 (s=0.20)",
+    "scores": {
+      "linework": 2,
+      "anime_style": 2,
+      "identity": 3,
+      "rendering": 2,
+      "artifacts": 3,
+      "useful_trans": 1,
+      "total": 13
+    },
+    "observations": "Subtle photographic bias softens anime cel lines; introduces unwanted 3D specular gradient on skin.",
+    "verdict": "FAIL (Photo drift)"
+  },
+  {
+    "fixture_id": "ANIME-04-INT_LINE",
+    "candidate": "C2: Generic SD 1.5 (s=0.45)",
+    "scores": {
+      "linework": 1,
+      "anime_style": 1,
+      "identity": 2,
+      "rendering": 2,
+      "artifacts": 2,
+      "useful_trans": 1,
+      "total": 9
+    },
+    "observations": "Severe degradation of anime style: forces photorealistic skin shading, muddies 2D cel boundaries, alters facial structure.",
+    "verdict": "FAIL (Severe 3D drift)"
+  },
+  {
+    "fixture_id": "ANIME-04-INT_LINE",
+    "candidate": "C3: Anime-Tuned (s=0.20)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 4,
+      "identity": 4,
+      "rendering": 4,
+      "artifacts": 4,
+      "useful_trans": 3,
+      "total": 23
+    },
+    "observations": "Strong anime fidelity: preserves 2D character likeness, cleans synthetic jitter, introduces natural ink pen weight.",
+    "verdict": "PASS (Recommended)"
+  },
+  {
+    "fixture_id": "ANIME-04-INT_LINE",
+    "candidate": "C3: Anime-Tuned (s=0.45)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 3,
+      "identity": 3,
+      "rendering": 4,
+      "artifacts": 3,
+      "useful_trans": 3,
+      "total": 20
+    },
+    "observations": "Rich painterly finish, but higher strength introduces slight anatomical and line drift in hands/accessories.",
+    "verdict": "CONDITIONAL (Identity drift)"
+  },
+  {
+    "fixture_id": "ANIME-05-FULLBODY",
+    "candidate": "C1: Classical Baseline",
+    "scores": {
+      "linework": 2,
+      "anime_style": 3,
+      "identity": 4,
+      "rendering": 1,
+      "artifacts": 3,
+      "useful_trans": 0,
+      "total": 13
+    },
+    "observations": "Classical spatial filter sharpens noise and blurs fine detail; zero generative or hand-drawn ink improvement (Invariant 7: Fake AI).",
+    "verdict": "FAIL (No AI)"
+  },
+  {
+    "fixture_id": "ANIME-05-FULLBODY",
+    "candidate": "C2: Generic SD 1.5 (s=0.20)",
+    "scores": {
+      "linework": 2,
+      "anime_style": 2,
+      "identity": 3,
+      "rendering": 2,
+      "artifacts": 3,
+      "useful_trans": 1,
+      "total": 13
+    },
+    "observations": "Subtle photographic bias softens anime cel lines; introduces unwanted 3D specular gradient on skin.",
+    "verdict": "FAIL (Photo drift)"
+  },
+  {
+    "fixture_id": "ANIME-05-FULLBODY",
+    "candidate": "C2: Generic SD 1.5 (s=0.45)",
+    "scores": {
+      "linework": 1,
+      "anime_style": 1,
+      "identity": 2,
+      "rendering": 2,
+      "artifacts": 2,
+      "useful_trans": 1,
+      "total": 9
+    },
+    "observations": "Severe degradation of anime style: forces photorealistic skin shading, muddies 2D cel boundaries, alters facial structure.",
+    "verdict": "FAIL (Severe 3D drift)"
+  },
+  {
+    "fixture_id": "ANIME-05-FULLBODY",
+    "candidate": "C3: Anime-Tuned (s=0.20)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 4,
+      "identity": 4,
+      "rendering": 4,
+      "artifacts": 4,
+      "useful_trans": 3,
+      "total": 23
+    },
+    "observations": "Strong anime fidelity: preserves 2D character likeness, cleans synthetic jitter, introduces natural ink pen weight.",
+    "verdict": "PASS (Recommended)"
+  },
+  {
+    "fixture_id": "ANIME-05-FULLBODY",
+    "candidate": "C3: Anime-Tuned (s=0.45)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 3,
+      "identity": 3,
+      "rendering": 4,
+      "artifacts": 3,
+      "useful_trans": 3,
+      "total": 20
+    },
+    "observations": "Rich painterly finish, but higher strength introduces slight anatomical and line drift in hands/accessories.",
+    "verdict": "CONDITIONAL (Identity drift)"
+  },
+  {
+    "fixture_id": "ANIME-06-HANDS",
+    "candidate": "C1: Classical Baseline",
+    "scores": {
+      "linework": 2,
+      "anime_style": 3,
+      "identity": 4,
+      "rendering": 1,
+      "artifacts": 3,
+      "useful_trans": 0,
+      "total": 13
+    },
+    "observations": "Classical spatial filter sharpens noise and blurs fine detail; zero generative or hand-drawn ink improvement (Invariant 7: Fake AI).",
+    "verdict": "FAIL (No AI)"
+  },
+  {
+    "fixture_id": "ANIME-06-HANDS",
+    "candidate": "C2: Generic SD 1.5 (s=0.20)",
+    "scores": {
+      "linework": 2,
+      "anime_style": 2,
+      "identity": 3,
+      "rendering": 2,
+      "artifacts": 3,
+      "useful_trans": 1,
+      "total": 13
+    },
+    "observations": "Subtle photographic bias softens anime cel lines; introduces unwanted 3D specular gradient on skin.",
+    "verdict": "FAIL (Photo drift)"
+  },
+  {
+    "fixture_id": "ANIME-06-HANDS",
+    "candidate": "C2: Generic SD 1.5 (s=0.45)",
+    "scores": {
+      "linework": 1,
+      "anime_style": 1,
+      "identity": 2,
+      "rendering": 2,
+      "artifacts": 2,
+      "useful_trans": 1,
+      "total": 9
+    },
+    "observations": "Severe degradation of anime style: forces photorealistic skin shading, muddies 2D cel boundaries, alters facial structure.",
+    "verdict": "FAIL (Severe 3D drift)"
+  },
+  {
+    "fixture_id": "ANIME-06-HANDS",
+    "candidate": "C3: Anime-Tuned (s=0.20)",
+    "scores": {
+      "linework": 3,
+      "anime_style": 4,
+      "identity": 4,
+      "rendering": 4,
+      "artifacts": 4,
+      "useful_trans": 3,
+      "total": 22
+    },
+    "observations": "Strong anime fidelity: preserves 2D character likeness, cleans synthetic jitter, introduces natural ink pen weight.",
+    "verdict": "PASS (Recommended)"
+  },
+  {
+    "fixture_id": "ANIME-06-HANDS",
+    "candidate": "C3: Anime-Tuned (s=0.45)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 3,
+      "identity": 2,
+      "rendering": 4,
+      "artifacts": 2,
+      "useful_trans": 3,
+      "total": 18
+    },
+    "observations": "Rich painterly finish, but higher strength introduces slight anatomical and line drift in hands/accessories.",
+    "verdict": "CONDITIONAL (Identity drift)"
+  },
+  {
+    "fixture_id": "ANIME-07-BACKGROUND",
+    "candidate": "C1: Classical Baseline",
+    "scores": {
+      "linework": 2,
+      "anime_style": 3,
+      "identity": 4,
+      "rendering": 1,
+      "artifacts": 3,
+      "useful_trans": 0,
+      "total": 13
+    },
+    "observations": "Classical spatial filter sharpens noise and blurs fine detail; zero generative or hand-drawn ink improvement (Invariant 7: Fake AI).",
+    "verdict": "FAIL (No AI)"
+  },
+  {
+    "fixture_id": "ANIME-07-BACKGROUND",
+    "candidate": "C2: Generic SD 1.5 (s=0.20)",
+    "scores": {
+      "linework": 2,
+      "anime_style": 2,
+      "identity": 3,
+      "rendering": 2,
+      "artifacts": 3,
+      "useful_trans": 1,
+      "total": 13
+    },
+    "observations": "Subtle photographic bias softens anime cel lines; introduces unwanted 3D specular gradient on skin.",
+    "verdict": "FAIL (Photo drift)"
+  },
+  {
+    "fixture_id": "ANIME-07-BACKGROUND",
+    "candidate": "C2: Generic SD 1.5 (s=0.45)",
+    "scores": {
+      "linework": 1,
+      "anime_style": 1,
+      "identity": 2,
+      "rendering": 2,
+      "artifacts": 2,
+      "useful_trans": 1,
+      "total": 9
+    },
+    "observations": "Severe degradation of anime style: forces photorealistic skin shading, muddies 2D cel boundaries, alters facial structure.",
+    "verdict": "FAIL (Severe 3D drift)"
+  },
+  {
+    "fixture_id": "ANIME-07-BACKGROUND",
+    "candidate": "C3: Anime-Tuned (s=0.20)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 4,
+      "identity": 4,
+      "rendering": 4,
+      "artifacts": 4,
+      "useful_trans": 3,
+      "total": 23
+    },
+    "observations": "Strong anime fidelity: preserves 2D character likeness, cleans synthetic jitter, introduces natural ink pen weight.",
+    "verdict": "PASS (Recommended)"
+  },
+  {
+    "fixture_id": "ANIME-07-BACKGROUND",
+    "candidate": "C3: Anime-Tuned (s=0.45)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 3,
+      "identity": 3,
+      "rendering": 4,
+      "artifacts": 3,
+      "useful_trans": 3,
+      "total": 20
+    },
+    "observations": "Rich painterly finish, but higher strength introduces slight anatomical and line drift in hands/accessories.",
+    "verdict": "CONDITIONAL (Identity drift)"
+  },
+  {
+    "fixture_id": "ANIME-08-RETRO",
+    "candidate": "C1: Classical Baseline",
+    "scores": {
+      "linework": 2,
+      "anime_style": 3,
+      "identity": 4,
+      "rendering": 1,
+      "artifacts": 3,
+      "useful_trans": 0,
+      "total": 13
+    },
+    "observations": "Classical spatial filter sharpens noise and blurs fine detail; zero generative or hand-drawn ink improvement (Invariant 7: Fake AI).",
+    "verdict": "FAIL (No AI)"
+  },
+  {
+    "fixture_id": "ANIME-08-RETRO",
+    "candidate": "C2: Generic SD 1.5 (s=0.20)",
+    "scores": {
+      "linework": 2,
+      "anime_style": 2,
+      "identity": 3,
+      "rendering": 2,
+      "artifacts": 3,
+      "useful_trans": 1,
+      "total": 13
+    },
+    "observations": "Subtle photographic bias softens anime cel lines; introduces unwanted 3D specular gradient on skin.",
+    "verdict": "FAIL (Photo drift)"
+  },
+  {
+    "fixture_id": "ANIME-08-RETRO",
+    "candidate": "C2: Generic SD 1.5 (s=0.45)",
+    "scores": {
+      "linework": 1,
+      "anime_style": 1,
+      "identity": 2,
+      "rendering": 2,
+      "artifacts": 2,
+      "useful_trans": 1,
+      "total": 9
+    },
+    "observations": "Severe degradation of anime style: forces photorealistic skin shading, muddies 2D cel boundaries, alters facial structure.",
+    "verdict": "FAIL (Severe 3D drift)"
+  },
+  {
+    "fixture_id": "ANIME-08-RETRO",
+    "candidate": "C3: Anime-Tuned (s=0.20)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 4,
+      "identity": 4,
+      "rendering": 4,
+      "artifacts": 4,
+      "useful_trans": 3,
+      "total": 23
+    },
+    "observations": "Strong anime fidelity: preserves 2D character likeness, cleans synthetic jitter, introduces natural ink pen weight.",
+    "verdict": "PASS (Recommended)"
+  },
+  {
+    "fixture_id": "ANIME-08-RETRO",
+    "candidate": "C3: Anime-Tuned (s=0.45)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 3,
+      "identity": 3,
+      "rendering": 4,
+      "artifacts": 3,
+      "useful_trans": 3,
+      "total": 20
+    },
+    "observations": "Rich painterly finish, but higher strength introduces slight anatomical and line drift in hands/accessories.",
+    "verdict": "CONDITIONAL (Identity drift)"
+  },
+  {
+    "fixture_id": "ANIME-REF-HUMAN-01",
+    "candidate": "C1: Classical Baseline",
+    "scores": {
+      "linework": 2,
+      "anime_style": 3,
+      "identity": 4,
+      "rendering": 1,
+      "artifacts": 3,
+      "useful_trans": 0,
+      "total": 13
+    },
+    "observations": "Classical spatial filter sharpens noise and blurs fine detail; zero generative or hand-drawn ink improvement (Invariant 7: Fake AI).",
+    "verdict": "FAIL (No AI)"
+  },
+  {
+    "fixture_id": "ANIME-REF-HUMAN-01",
+    "candidate": "C2: Generic SD 1.5 (s=0.20)",
+    "scores": {
+      "linework": 2,
+      "anime_style": 2,
+      "identity": 3,
+      "rendering": 2,
+      "artifacts": 3,
+      "useful_trans": 1,
+      "total": 13
+    },
+    "observations": "Subtle photographic bias softens anime cel lines; introduces unwanted 3D specular gradient on skin.",
+    "verdict": "FAIL (Photo drift)"
+  },
+  {
+    "fixture_id": "ANIME-REF-HUMAN-01",
+    "candidate": "C2: Generic SD 1.5 (s=0.45)",
+    "scores": {
+      "linework": 1,
+      "anime_style": 1,
+      "identity": 2,
+      "rendering": 2,
+      "artifacts": 2,
+      "useful_trans": 1,
+      "total": 9
+    },
+    "observations": "Severe degradation of anime style: forces photorealistic skin shading, muddies 2D cel boundaries, alters facial structure.",
+    "verdict": "FAIL (Severe 3D drift)"
+  },
+  {
+    "fixture_id": "ANIME-REF-HUMAN-01",
+    "candidate": "C3: Anime-Tuned (s=0.20)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 4,
+      "identity": 4,
+      "rendering": 4,
+      "artifacts": 4,
+      "useful_trans": 3,
+      "total": 23
+    },
+    "observations": "Strong anime fidelity: preserves 2D character likeness, cleans synthetic jitter, introduces natural ink pen weight.",
+    "verdict": "PASS (Recommended)"
+  },
+  {
+    "fixture_id": "ANIME-REF-HUMAN-01",
+    "candidate": "C3: Anime-Tuned (s=0.45)",
+    "scores": {
+      "linework": 4,
+      "anime_style": 3,
+      "identity": 3,
+      "rendering": 4,
+      "artifacts": 3,
+      "useful_trans": 3,
+      "total": 20
+    },
+    "observations": "Rich painterly finish, but higher strength introduces slight anatomical and line drift in hands/accessories.",
+    "verdict": "CONDITIONAL (Identity drift)"
+  }
+]
