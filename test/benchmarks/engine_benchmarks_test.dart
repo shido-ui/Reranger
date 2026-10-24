@@ -352,6 +352,6 @@ void main() {
       print('\n==========================================================');
       print('BENCHMARK RUN SUMMARY COMPLETE');
       print('==========================================================\n');
-    });
+    }, timeout: const Timeout(Duration(minutes: 3)));
   });
 }

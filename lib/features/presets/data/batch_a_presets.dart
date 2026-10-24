@@ -3,6 +3,7 @@ import '../../../domain/presets/preset_parameter.dart';
 import '../../../domain/recipes/render_graph.dart';
 import '../../../domain/recipes/render_graph_node.dart';
 import '../../../domain/recipes/style_render_nodes.dart';
+import '../../../domain/recipes/adaptive_vibrancy_node.dart';
 
 /// Batch A Presets (1 to 4):
 /// 1. Graphite Pencil
@@ -242,8 +243,14 @@ class BatchAPresets {
             highlightB: 140,
             vignetteFalloff: vignette,
           ),
+          'vib_2': AdaptiveVibrancyNode(
+            id: 'vib_2',
+            inputNodeId: 'duo_1',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'duo_1',
+        outputNodeId: 'vib_2',
       );
     },
   );

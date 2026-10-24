@@ -16,6 +16,7 @@ import '../../domain/recipes/adversarial_stealth_node.dart';
 import '../../domain/recipes/pixelate_quantize_node.dart';
 import '../../domain/recipes/artistic_render_nodes.dart';
 import '../../domain/recipes/blend_composite_node.dart';
+import '../../domain/recipes/adaptive_vibrancy_node.dart';
 import '../../domain/layers/editor_layer.dart';
 import 'render_node_cache.dart';
 
@@ -101,7 +102,9 @@ class RenderGraphExecutor {
       GrainOverlayNode.nodeType,
       DuoToneNode.nodeType,
       RecolorNode.nodeType,
-      AdversarialStealthNode.nodeType,
+      ARMORAttackNode.nodeType,
+      SensorNoiseNode.nodeType,
+      AdversarialStealthNode.legacyNodeType,
       PixelateQuantizeNode.nodeType,
       HalftoneNode.nodeType,
       CrosshatchNode.nodeType,
@@ -110,6 +113,7 @@ class RenderGraphExecutor {
       WatercolorWashNode.nodeType,
       PolygonalFacetNode.nodeType,
       BlendCompositeNode.nodeType,
+      AdaptiveVibrancyNode.nodeType,
     };
     for (final node in orderedNodes) {
       if (!supportedTypes.contains(node.type)) {
@@ -386,14 +390,23 @@ class RenderGraphExecutor {
         nodeId: node.id,
         isCancelled: isCancelled,
       );
-    } else if (node is AdversarialStealthNode) {
+    } else if (node is ARMORAttackNode) {
       final input = nodeOutputs[node.inputNodeIds[0]]!;
-      return _computeAdversarialStealth(
+      return _computeARMORAttack(
         input: input,
         width: width,
         height: height,
         strength: node.strength,
-        applyFrequencyPerturbation: node.applyFrequencyPerturbation,
+        isCancelled: isCancelled,
+      );
+    } else if (node is SensorNoiseNode) {
+      final input = nodeOutputs[node.inputNodeIds[0]]!;
+      return _computeSensorNoise(
+        input: input,
+        width: width,
+        height: height,
+        noiseIntensity: node.noiseIntensity,
+        chromaticAberration: node.chromaticAberration,
         isCancelled: isCancelled,
       );
     } else if (node is PixelateQuantizeNode) {
@@ -493,6 +506,17 @@ class RenderGraphExecutor {
         sourceWidth: sourceNode?.sourceWidth,
         sourceHeight: sourceNode?.sourceHeight,
         nodeId: node.id,
+        isCancelled: isCancelled,
+      );
+    } else if (node is AdaptiveVibrancyNode) {
+      final input = nodeOutputs[node.inputNodeIds[0]]!;
+      return _computeAdaptiveVibrancy(
+        input: input,
+        width: width,
+        height: height,
+        vibrancy: node.vibrancy,
+        contrast: node.contrast,
+        preserveAlpha: node.preserveAlpha,
         isCancelled: isCancelled,
       );
     } else {
@@ -1048,92 +1072,193 @@ class RenderGraphExecutor {
     return output;
   }
 
-  // Academic Adversarial Robustness Research
-  static Uint8List _computeAdversarialStealth({
+  // Robust Stealth Engine V2: ARMOR 8x8 DCT Frequency Perturbation Basis
+  static final List<List<double>> _armorSpatialDelta =
+      _computeArmorSpatialBasis();
+
+  static List<List<double>> _computeArmorSpatialBasis() {
+    const uapDct = [
+      [0.0, 0.0, 0.20, -0.50, 0.70, -0.50, 0.30, -0.10],
+      [0.0, 0.25, -0.70, 1.10, -1.20, 0.85, -0.55, 0.20],
+      [0.20, -0.70, 1.25, -1.50, 1.40, -1.10, 0.70, -0.25],
+      [-0.50, 1.10, -1.50, 1.80, -1.65, 1.25, -0.80, 0.35],
+      [0.70, -1.20, 1.40, -1.65, 1.55, -1.20, 0.70, -0.25],
+      [-0.50, 0.85, -1.10, 1.25, -1.20, 0.95, -0.50, 0.20],
+      [0.30, -0.55, 0.70, -0.80, 0.70, -0.50, 0.30, -0.10],
+      [-0.10, 0.20, -0.25, 0.35, -0.25, 0.20, -0.10, 0.0],
+    ];
+
+    final basis = List.generate(8, (_) => List.filled(8, 0.0));
+    for (int y = 0; y < 8; y++) {
+      for (int x = 0; x < 8; x++) {
+        double sum = 0.0;
+        for (int u = 0; u < 8; u++) {
+          final cu = (u == 0) ? (1.0 / math.sqrt(2.0)) : 1.0;
+          final cosU = math.cos((2.0 * x + 1.0) * u * math.pi / 16.0);
+          for (int v = 0; v < 8; v++) {
+            final cv = (v == 0) ? (1.0 / math.sqrt(2.0)) : 1.0;
+            final cosV = math.cos((2.0 * y + 1.0) * v * math.pi / 16.0);
+            sum += cu * cv * uapDct[v][u] * cosU * cosV;
+          }
+        }
+        basis[y][x] = sum * 0.25;
+      }
+    }
+    return basis;
+  }
+
+  static Uint8List _computeARMORAttack({
     required Uint8List input,
     required int width,
     required int height,
     required double strength,
-    required bool applyFrequencyPerturbation,
     bool Function()? isCancelled,
   }) {
     final total = width * height;
     final dst = Uint8List(total * 4);
     if (total == 0) return dst;
 
-    final eps = (strength.clamp(0.0, 1.0) * 6.0);
+    final eps = strength.clamp(0.0, 1.0);
     if (eps <= 0.001) {
       dst.setAll(0, input);
       return dst;
     }
 
-    // 1. Calculate luminance channel
-    final lum = Float32List(total);
-    for (int i = 0; i < total; i++) {
-      final off = i * 4;
-      lum[i] =
-          (299.0 * input[off] +
-              587.0 * input[off + 1] +
-              114.0 * input[off + 2]) /
-          1000.0;
-    }
+    final scaleFactor = eps * 3.2;
 
-    double getLum(int x, int y) {
-      final cx = x.clamp(0, width - 1);
-      final cy = y.clamp(0, height - 1);
-      return lum[cy * width + cx];
-    }
-
-    // 2. FGSM + Frequency Perturbation
     for (int y = 0; y < height; y++) {
       if ((y & 15) == 0 && isCancelled != null && isCancelled()) {
-        throw const RenderGraphCancelledFailure('AdversarialStealthNode');
+        throw const RenderGraphCancelledFailure('ARMORAttackNode');
+      }
+      final y8 = y & 7;
+      for (int x = 0; x < width; x++) {
+        final x8 = x & 7;
+        final idx = (y * width + x) * 4;
+
+        final uapVal = _armorSpatialDelta[y8][x8] * scaleFactor;
+        final phase = math.sin((x * 0.125) + (y * 0.125)) * 0.35;
+        double totalDelta = uapVal * (1.0 + phase);
+
+        final alpha = input[idx + 3] / 255.0;
+        totalDelta *= alpha;
+
+        dst[idx] = (input[idx] + totalDelta * 1.05).round().clamp(0, 255);
+        dst[idx + 1] = (input[idx + 1] + totalDelta * 0.95).round().clamp(
+          0,
+          255,
+        );
+        dst[idx + 2] = (input[idx + 2] + totalDelta * 1.00).round().clamp(
+          0,
+          255,
+        );
+        dst[idx + 3] = input[idx + 3];
+      }
+    }
+    return dst;
+  }
+
+  static Uint8List _computeSensorNoise({
+    required Uint8List input,
+    required int width,
+    required int height,
+    required double noiseIntensity,
+    required double chromaticAberration,
+    bool Function()? isCancelled,
+  }) {
+    final total = width * height;
+    final dst = Uint8List(total * 4);
+    if (total == 0) return dst;
+
+    final nIntensity = noiseIntensity.clamp(0.0, 1.0);
+    final ca = chromaticAberration.clamp(0.0, 1.0);
+
+    if (nIntensity <= 0.001 && ca <= 0.001) {
+      dst.setAll(0, input);
+      return dst;
+    }
+
+    final cx = width * 0.5;
+    final cy = height * 0.5;
+    final maxDist = math.sqrt(cx * cx + cy * cy);
+
+    double sampleChannel(double sx, double sy, int ch) {
+      int x0 = sx.floor();
+      int y0 = sy.floor();
+      int x1 = x0 + 1;
+      int y1 = y0 + 1;
+
+      x0 = x0.clamp(0, width - 1);
+      x1 = x1.clamp(0, width - 1);
+      y0 = y0.clamp(0, height - 1);
+      y1 = y1.clamp(0, height - 1);
+
+      final fx = sx - sx.floorToDouble();
+      final fy = sy - sy.floorToDouble();
+
+      final v00 = input[(y0 * width + x0) * 4 + ch];
+      final v10 = input[(y0 * width + x1) * 4 + ch];
+      final v01 = input[(y1 * width + x0) * 4 + ch];
+      final v11 = input[(y1 * width + x1) * 4 + ch];
+
+      return (v00 * (1.0 - fx) + v10 * fx) * (1.0 - fy) +
+          (v01 * (1.0 - fx) + v11 * fx) * fy;
+    }
+
+    for (int y = 0; y < height; y++) {
+      if ((y & 15) == 0 && isCancelled != null && isCancelled()) {
+        throw const RenderGraphCancelledFailure('SensorNoiseNode');
       }
       for (int x = 0; x < width; x++) {
-        final idx = y * width + x;
-        final off = idx * 4;
+        final off = (y * width + x) * 4;
 
-        final center = getLum(x, y);
-        final laplacian =
-            4.0 * center -
-            getLum(x + 1, y) -
-            getLum(x - 1, y) -
-            getLum(x, y + 1) -
-            getLum(x, y - 1);
+        double rVal, gVal, bVal;
+        if (ca > 0.001 && maxDist > 0.001) {
+          final dx = x - cx;
+          final dy = y - cy;
+          final dist = math.sqrt(dx * dx + dy * dy);
+          final normDist = dist / maxDist;
+          final disp = ca * 1.5 * (normDist * normDist);
 
-        final gx =
-            (getLum(x + 1, y - 1) +
-                2.0 * getLum(x + 1, y) +
-                getLum(x + 1, y + 1)) -
-            (getLum(x - 1, y - 1) +
-                2.0 * getLum(x - 1, y) +
-                getLum(x - 1, y + 1));
-        final gy =
-            (getLum(x - 1, y + 1) +
-                2.0 * getLum(x, y + 1) +
-                getLum(x + 1, y + 1)) -
-            (getLum(x - 1, y - 1) +
-                2.0 * getLum(x, y - 1) +
-                getLum(x + 1, y - 1));
+          final rx = x + dx * (disp / (width * 0.5));
+          final ry = y + dy * (disp / (height * 0.5));
+          rVal = sampleChannel(rx, ry, 0);
 
-        double grad = gx + gy;
-        if (applyFrequencyPerturbation) {
-          final phase = math.sin(x * 0.75 + y * 0.75);
-          grad += laplacian * 0.5 + phase * 2.0;
+          gVal = input[off + 1].toDouble();
+
+          final bx = x - dx * (disp / (width * 0.5));
+          final by = y - dy * (disp / (height * 0.5));
+          bVal = sampleChannel(bx, by, 2);
+        } else {
+          rVal = input[off].toDouble();
+          gVal = input[off + 1].toDouble();
+          bVal = input[off + 2].toDouble();
         }
 
-        double signVal = (grad > 0.0) ? 1.0 : ((grad < 0.0) ? -1.0 : 0.0);
-        if (signVal == 0.0) {
-          signVal = ((idx % 2) == 0) ? 1.0 : -1.0;
+        if (nIntensity > 0.001) {
+          int seed =
+              ((x * 374761393) ^ (y * 668265263) ^ 0x9e3779b9) & 0xFFFFFFFF;
+          seed = ((seed ^ (seed >> 13)) * 1274126177) & 0xFFFFFFFF;
+          final noise = (((seed & 0xFFFF) / 32768.0) - 1.0) * nIntensity * 3.0;
+
+          final senselType = ((y & 1) << 1) | (x & 1);
+          if (senselType == 0) {
+            rVal += noise * 1.2;
+            gVal += noise * 0.25;
+            bVal += noise * 0.25;
+          } else if (senselType == 1 || senselType == 2) {
+            gVal += noise * 1.0;
+            rVal += noise * 0.2;
+            bVal += noise * 0.2;
+          } else {
+            bVal += noise * 1.35;
+            rVal += noise * 0.3;
+            gVal += noise * 0.3;
+          }
         }
 
-        double delta = signVal * eps;
-        final alphaFactor = input[off + 3] / 255.0;
-        delta *= alphaFactor;
-
-        dst[off] = (input[off] + delta).round().clamp(0, 255);
-        dst[off + 1] = (input[off + 1] + delta).round().clamp(0, 255);
-        dst[off + 2] = (input[off + 2] + delta).round().clamp(0, 255);
+        dst[off] = rVal.round().clamp(0, 255);
+        dst[off + 1] = gVal.round().clamp(0, 255);
+        dst[off + 2] = bVal.round().clamp(0, 255);
         dst[off + 3] = input[off + 3];
       }
     }
@@ -1644,5 +1769,125 @@ class RenderGraphExecutor {
       }
     }
     return dst;
+  }
+
+  static Uint8List _computeAdaptiveVibrancy({
+    required Uint8List input,
+    required int width,
+    required int height,
+    required double vibrancy,
+    required double contrast,
+    required bool preserveAlpha,
+    bool Function()? isCancelled,
+  }) {
+    final total = width * height;
+    final dst = Uint8List(total * 4);
+
+    for (int y = 0; y < height; y++) {
+      if ((y & 15) == 0 && isCancelled != null && isCancelled()) {
+        throw const RenderGraphCancelledFailure('AdaptiveVibrancyNode');
+      }
+      final rowOff = y * width;
+      for (int x = 0; x < width; x++) {
+        final off = (rowOff + x) * 4;
+        final sa = input[off + 3];
+        if (sa == 0) {
+          dst[off] = 0;
+          dst[off + 1] = 0;
+          dst[off + 2] = 0;
+          dst[off + 3] = 0;
+          continue;
+        }
+
+        final rLin = _srgbToLinear(input[off] / 255.0);
+        final gLin = _srgbToLinear(input[off + 1] / 255.0);
+        final bLin = _srgbToLinear(input[off + 2] / 255.0);
+
+        final xVal =
+            (0.4124564 * rLin + 0.3575761 * gLin + 0.1804375 * bLin) / 0.95047;
+        final yVal =
+            (0.2126729 * rLin + 0.7151522 * gLin + 0.0721750 * bLin) / 1.00000;
+        final zVal =
+            (0.0193339 * rLin + 0.1191920 * gLin + 0.9503041 * bLin) / 1.08883;
+
+        final fx = _labF(xVal);
+        final fy = _labF(yVal);
+        final fz = _labF(zVal);
+
+        double labL = 116.0 * fy - 16.0;
+        double labA = 500.0 * (fx - fy);
+        double labB = 200.0 * (fy - fz);
+
+        // Adaptive contrast / S-curve on L*
+        if (contrast.abs() > 1e-4) {
+          final lNorm = labL / 100.0;
+          final lAdj =
+              lNorm +
+              contrast * (lNorm - 0.5) * (1.0 - (lNorm - 0.5).abs() * 2.0);
+          labL = lAdj.clamp(0.0, 1.0) * 100.0;
+        }
+
+        // Saliency-weighted chroma boost on a* and b* with strict hue invariance
+        if (vibrancy > 1e-4) {
+          final chroma = math.sqrt(labA * labA + labB * labB);
+          if (chroma > 1e-4) {
+            final saliency = (1.0 - (chroma / 160.0)).clamp(0.2, 1.0);
+            final k = 1.0 + vibrancy * saliency;
+            labA *= k;
+            labB *= k;
+          }
+        }
+
+        // Convert back to sRGB
+        final outFy = (labL + 16.0) / 116.0;
+        final outFx = outFy + labA / 500.0;
+        final outFz = outFy - labB / 200.0;
+
+        final outX = 0.95047 * _labInvF(outFx);
+        final outY = 1.00000 * _labInvF(outFy);
+        final outZ = 1.08883 * _labInvF(outFz);
+
+        final outRLin = 3.2404542 * outX - 1.5371385 * outY - 0.4985314 * outZ;
+        final outGLin = -0.9692660 * outX + 1.8760108 * outY + 0.0415560 * outZ;
+        final outBLin = 0.0556434 * outX - 0.2040259 * outY + 1.0572252 * outZ;
+
+        dst[off] = (_linearToSrgb(outRLin) * 255.0).round().clamp(0, 255);
+        dst[off + 1] = (_linearToSrgb(outGLin) * 255.0).round().clamp(0, 255);
+        dst[off + 2] = (_linearToSrgb(outBLin) * 255.0).round().clamp(0, 255);
+        dst[off + 3] = preserveAlpha ? sa : 255;
+      }
+    }
+
+    return dst;
+  }
+
+  static double _srgbToLinear(double c) {
+    return c <= 0.04045
+        ? c / 12.92
+        : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
+  }
+
+  static double _linearToSrgb(double c) {
+    if (c <= 0.0031308) {
+      return c <= 0.0 ? 0.0 : 12.92 * c;
+    } else {
+      return 1.055 * math.pow(c, 1.0 / 2.4) - 0.055;
+    }
+  }
+
+  static double _labF(double t) {
+    if (t > 0.008856451679) {
+      return math.pow(t, 1.0 / 3.0).toDouble();
+    } else {
+      return 7.787037 * t + 0.137931034;
+    }
+  }
+
+  static double _labInvF(double f) {
+    if (f > 0.20689655) {
+      return f * f * f;
+    } else {
+      return (f - 0.137931034) / 7.787037;
+    }
   }
 }

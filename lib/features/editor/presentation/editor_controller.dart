@@ -13,6 +13,8 @@ import '../../../domain/layers/history_command.dart';
 import '../../../domain/presets/preset_definition.dart';
 import '../../../domain/project/project_entity.dart';
 import '../../../domain/recipes/render_graph.dart';
+import '../../../domain/recipes/render_graph_node.dart';
+import '../../../domain/recipes/adversarial_stealth_node.dart';
 import '../../presets/data/preset_catalog.dart';
 import 'layer_history_controller.dart';
 
@@ -50,6 +52,7 @@ class EditorController extends ChangeNotifier {
   double splitPosition = 0.5;
   double renderScale = 1.0;
   String exportFormat = 'PNG';
+  double realism = 0.0;
 
   bool isComparing = false;
   bool isLoading = true;
@@ -327,6 +330,14 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Sets Realism level (0.0 to 1.0) controlling Stealth Engine V2 in Export pipeline.
+  void setRealism(double value) {
+    final clamped = value.clamp(0.0, 1.0);
+    if (realism == clamped) return;
+    realism = clamped;
+    notifyListeners();
+  }
+
   void _onLayerStackChanged() {
     _recordDirtyJournal();
     _dispatchRender();
@@ -412,6 +423,7 @@ class EditorController extends ChangeNotifier {
 
   /// Renders the active graph at full source resolution (multiplied by [scale]).
   /// Guaranteed not to use downscaled preview viewport buffers (DEF-025).
+  /// When [realism] > 0.0, wires Robust Stealth Engine V2 (ARMOR UAP, Sensor Noise, and Metadata Annihilation).
   Future<img.Image> renderFullResolutionOutput({double scale = 1.0}) async {
     if (sourceImageBytes == null || project == null || activePreset == null) {
       throw StateError(
@@ -419,10 +431,41 @@ class EditorController extends ChangeNotifier {
       );
     }
 
-    final fullGraph = buildActiveGraph();
+    var fullGraph = buildActiveGraph();
+
+    // Wire Stealth Engine V2 if Realism > 0.0
+    if (realism > 0.0) {
+      final outNodeId = fullGraph.outputNodeId;
+      final armorNode = ARMORAttackNode(
+        id: 'armor_export_${DateTime.now().microsecondsSinceEpoch}',
+        inputNodeId: outNodeId,
+        strength: realism,
+      );
+      final sensorNode = SensorNoiseNode(
+        id: 'sensor_export_${DateTime.now().microsecondsSinceEpoch}',
+        inputNodeId: armorNode.id,
+        noiseIntensity: (realism * 0.4).clamp(0.0, 1.0),
+        chromaticAberration: (realism * 0.3).clamp(0.0, 1.0),
+      );
+      final updatedNodes = Map<String, RenderGraphNode>.from(fullGraph.nodes);
+      updatedNodes[armorNode.id] = armorNode;
+      updatedNodes[sensorNode.id] = sensorNode;
+      fullGraph = RenderGraph(
+        id: fullGraph.id,
+        version: fullGraph.version,
+        nodes: updatedNodes,
+        outputNodeId: sensorNode.id,
+      );
+    }
+
+    // Apply metadata annihilation before rendering
+    final workingSourceBytes = realism > 0.0
+        ? MetadataAnnihilator.strip(sourceImageBytes!)
+        : sourceImageBytes!;
+
     final fullResult = await renderJobController.executor.execute(
       graph: fullGraph,
-      sourceImageBytes: sourceImageBytes!,
+      sourceImageBytes: workingSourceBytes,
       renderScale: scale.clamp(0.1, 4.0),
     );
 
@@ -446,21 +489,16 @@ class EditorController extends ChangeNotifier {
 
     try {
       Uint8List exportBytes = previewPngBytes!;
-      // If preview was rendered at downscaled resolution, perform full 1.0 scale render for lossless archival
-      if (project!.sourceWidth > 1536 || project!.sourceHeight > 1536) {
-        final fullGraph = buildActiveGraph();
-        final fullResult = await renderJobController.executor.execute(
-          graph: fullGraph,
-          sourceImageBytes: sourceImageBytes!,
-          renderScale: 1.0,
-        );
-        final fullImg = img.Image.fromBytes(
-          width: fullResult.width,
-          height: fullResult.height,
-          bytes: fullResult.pixelBytes.buffer,
-          numChannels: 4,
-        );
+      // If preview was rendered at downscaled resolution or realism is active, perform full 1.0 scale render for lossless archival
+      if (project!.sourceWidth > 1536 ||
+          project!.sourceHeight > 1536 ||
+          realism > 0.0) {
+        final fullImg = await renderFullResolutionOutput(scale: 1.0);
         exportBytes = Uint8List.fromList(img.encodePng(fullImg));
+      }
+
+      if (realism > 0.0) {
+        exportBytes = MetadataAnnihilator.strip(exportBytes);
       }
 
       final fileName = 'export_${DateTime.now().millisecondsSinceEpoch}.png';

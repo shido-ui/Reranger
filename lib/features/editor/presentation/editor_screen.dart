@@ -104,6 +104,21 @@ class EditorScreen extends ConsumerWidget {
                   }
                 },
               ),
+              // Autodraw Studio Entry Button (Prompt 4)
+              IconButton(
+                key: const ValueKey('autodraw_studio_button'),
+                icon: const Icon(Icons.draw_outlined),
+                tooltip: 'Autodraw Studio',
+                onPressed: () {
+                  final target = AppRouteNames.autodraw.replaceAll(
+                    ':id',
+                    projectId,
+                  );
+                  if (GoRouter.maybeOf(context) != null) {
+                    context.push(target);
+                  }
+                },
+              ),
               // Pro Tools Studio Entry Button
               IconButton(
                 icon: const Icon(Icons.auto_awesome),

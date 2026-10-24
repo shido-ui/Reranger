@@ -9,6 +9,7 @@ import 'adversarial_stealth_node.dart';
 import 'pixelate_quantize_node.dart';
 import 'artistic_render_nodes.dart';
 import 'blend_composite_node.dart';
+import 'adaptive_vibrancy_node.dart';
 
 /// Abstract base class for all versioned nodes in the Render Graph.
 /// Enforces:
@@ -106,7 +107,11 @@ abstract class RenderGraphNode {
         return DuoToneNode.fromJson(json);
       case RecolorNode.nodeType:
         return RecolorNode.fromJson(json);
-      case AdversarialStealthNode.nodeType:
+      case ARMORAttackNode.nodeType:
+        return ARMORAttackNode.fromJson(json);
+      case SensorNoiseNode.nodeType:
+        return SensorNoiseNode.fromJson(json);
+      case AdversarialStealthNode.legacyNodeType:
         return AdversarialStealthNode.fromJson(json);
       case PixelateQuantizeNode.nodeType:
         return PixelateQuantizeNode.fromJson(json);
@@ -124,6 +129,8 @@ abstract class RenderGraphNode {
         return PolygonalFacetNode.fromJson(json);
       case BlendCompositeNode.nodeType:
         return BlendCompositeNode.fromJson(json);
+      case AdaptiveVibrancyNode.nodeType:
+        return AdaptiveVibrancyNode.fromJson(json);
       default:
         throw RenderInvalidParametersFailure(
           nodeId: json['id'] as String? ?? 'unknown',

@@ -763,6 +763,49 @@ class _ProToolsSheetState extends State<ProToolsSheet>
             setState(() {});
           },
         ),
+        const SizedBox(height: AppSpacingTokens.lg),
+
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Realism',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: primaryText,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            Text(
+              '${(widget.controller.realism * 100).round()}%',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: accentColor,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: AppSpacingTokens.xs),
+        Text(
+          'Hardware realism defense (ARMOR UAP DCT perturbation, Bayer pattern noise & chromatic aberration). Strips C2PA and EXIF metadata.',
+          style: theme.textTheme.bodySmall?.copyWith(color: secondaryText),
+        ),
+        const SizedBox(height: AppSpacingTokens.xs),
+        Semantics(
+          label: 'Realism',
+          value: '${(widget.controller.realism * 100).round()}%',
+          child: Slider(
+            key: const Key('pro_tools_realism_slider'),
+            value: widget.controller.realism,
+            min: 0.0,
+            max: 1.0,
+            divisions: 20,
+            activeColor: accentColor,
+            onChanged: (val) {
+              widget.controller.setRealism(val);
+              setState(() {});
+            },
+          ),
+        ),
       ],
     );
   }

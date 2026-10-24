@@ -4,6 +4,7 @@ import '../../../domain/recipes/render_graph.dart';
 import '../../../domain/recipes/render_graph_node.dart';
 import '../../../domain/recipes/style_render_nodes.dart';
 import '../../../domain/recipes/artistic_render_nodes.dart';
+import '../../../domain/recipes/adaptive_vibrancy_node.dart';
 
 /// Batch C Presets (9 to 12):
 /// 9. Watercolor (Wet Watercolor Bleed)
@@ -59,8 +60,14 @@ class BatchCPresets {
             paperTooth: tooth,
             seed: 4040,
           ),
+          'vib_2': AdaptiveVibrancyNode(
+            id: 'vib_2',
+            inputNodeId: 'wash_1',
+            vibrancy: 0.35,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'wash_1',
+        outputNodeId: 'vib_2',
       );
     },
   );
@@ -120,8 +127,14 @@ class BatchCPresets {
             inkStrength: 0.0,
             contrastGamma: contrast,
           ),
+          'vib_3': AdaptiveVibrancyNode(
+            id: 'vib_3',
+            inputNodeId: 'cel_2',
+            vibrancy: 0.30,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'cel_2',
+        outputNodeId: 'vib_3',
       );
     },
   );
@@ -181,8 +194,14 @@ class BatchCPresets {
             dotIntensity: dots,
             preserveColor: true,
           ),
+          'vib_3': AdaptiveVibrancyNode(
+            id: 'vib_3',
+            inputNodeId: 'half_2',
+            vibrancy: 0.35,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'half_2',
+        outputNodeId: 'vib_3',
       );
     },
   );
@@ -244,8 +263,14 @@ class BatchCPresets {
             intensity: grain,
             seed: 2026,
           ),
+          'vib_3': AdaptiveVibrancyNode(
+            id: 'vib_3',
+            inputNodeId: 'grain_2',
+            vibrancy: 0.30,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_2',
+        outputNodeId: 'vib_3',
       );
     },
   );

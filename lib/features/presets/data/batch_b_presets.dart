@@ -4,6 +4,7 @@ import '../../../domain/recipes/render_graph.dart';
 import '../../../domain/recipes/render_graph_node.dart';
 import '../../../domain/recipes/style_render_nodes.dart';
 import '../../../domain/recipes/artistic_render_nodes.dart';
+import '../../../domain/recipes/adaptive_vibrancy_node.dart';
 
 /// Batch B Presets (5 to 8):
 /// 5. Anime Cel Shade
@@ -65,8 +66,14 @@ class BatchBPresets {
             inkStrength: inkStr,
             contrastGamma: gamma,
           ),
+          'vib_4': AdaptiveVibrancyNode(
+            id: 'vib_4',
+            inputNodeId: 'cel_3',
+            vibrancy: 0.35,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'cel_3',
+        outputNodeId: 'vib_4',
       );
     },
   );
@@ -131,8 +138,14 @@ class BatchBPresets {
             intensity: grain,
             seed: 1962,
           ),
+          'vib_5': AdaptiveVibrancyNode(
+            id: 'vib_5',
+            inputNodeId: 'grain_4',
+            vibrancy: 0.30,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_4',
+        outputNodeId: 'vib_5',
       );
     },
   );
@@ -191,8 +204,14 @@ class BatchBPresets {
             inkStrength: vig,
             contrastGamma: gamma,
           ),
+          'vib_4': AdaptiveVibrancyNode(
+            id: 'vib_4',
+            inputNodeId: 'cel_3',
+            vibrancy: 0.35,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'cel_3',
+        outputNodeId: 'vib_4',
       );
     },
   );
@@ -257,8 +276,14 @@ class BatchBPresets {
             intensity: grain,
             seed: 1974,
           ),
+          'vib_3': AdaptiveVibrancyNode(
+            id: 'vib_3',
+            inputNodeId: 'grain_2',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_2',
+        outputNodeId: 'vib_3',
       );
     },
   );

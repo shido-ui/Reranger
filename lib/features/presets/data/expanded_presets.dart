@@ -5,6 +5,7 @@ import '../../../domain/recipes/render_graph_node.dart';
 import '../../../domain/recipes/style_render_nodes.dart';
 import '../../../domain/recipes/pixelate_quantize_node.dart';
 import '../../../domain/recipes/artistic_render_nodes.dart';
+import '../../../domain/recipes/adaptive_vibrancy_node.dart';
 
 /// Expanded Presets covering Categories 1 through 6 to complete the canonical 48-preset catalog.
 ///
@@ -326,8 +327,14 @@ class ExpandedPresets {
             highlightB: 248,
             vignetteFalloff: depth,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'duo_4',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'duo_4',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -443,8 +450,14 @@ class ExpandedPresets {
             paperTooth: 0.16,
             seed: 4041,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'wash_1',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'wash_1',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -513,8 +526,14 @@ class ExpandedPresets {
             highlightB: 214,
             vignetteFalloff: 0.10,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'duo_4',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'duo_4',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -589,8 +608,14 @@ class ExpandedPresets {
             intensity: tooth,
             seed: 205,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_5',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -665,8 +690,14 @@ class ExpandedPresets {
             intensity: grain,
             seed: 206,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_5',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -735,8 +766,14 @@ class ExpandedPresets {
             highlightB: 237,
             vignetteFalloff: 0.12,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'duo_4',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'duo_4',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -812,8 +849,14 @@ class ExpandedPresets {
             intensity: 0.14,
             seed: 208,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_5',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -951,8 +994,14 @@ class ExpandedPresets {
             highlightB: 232,
             vignetteFalloff: 0.30,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'duo_4',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'duo_4',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1027,8 +1076,14 @@ class ExpandedPresets {
             intensity: 0.09,
             seed: 305,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_5',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1097,8 +1152,14 @@ class ExpandedPresets {
             highlightB: 212,
             vignetteFalloff: 0.22,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'duo_4',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'duo_4',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1174,8 +1235,14 @@ class ExpandedPresets {
             intensity: grain,
             seed: 308,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_5',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1241,8 +1308,14 @@ class ExpandedPresets {
             intensity: grain,
             seed: 401,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_2',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_2',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1304,8 +1377,14 @@ class ExpandedPresets {
             intensity: grain,
             seed: 404,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_2',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_2',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1367,8 +1446,14 @@ class ExpandedPresets {
             intensity: grain,
             seed: 405,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_2',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_2',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1430,8 +1515,14 @@ class ExpandedPresets {
             intensity: grain,
             seed: 406,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_2',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_2',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1506,8 +1597,14 @@ class ExpandedPresets {
             intensity: 0.07,
             seed: 407,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_5',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1572,8 +1669,14 @@ class ExpandedPresets {
             intensity: grain,
             seed: 408,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_4',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_4',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1639,8 +1742,14 @@ class ExpandedPresets {
             intensity: grit,
             seed: 503,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_2',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_2',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1709,8 +1818,14 @@ class ExpandedPresets {
             highlightB: 101,
             vignetteFalloff: vig,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'duo_4',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'duo_4',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1769,8 +1884,14 @@ class ExpandedPresets {
             intensity: grain,
             seed: 505,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_2',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_2',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1845,8 +1966,14 @@ class ExpandedPresets {
             intensity: fiber,
             seed: 506,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_5',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1916,8 +2043,14 @@ class ExpandedPresets {
             highlightB: 210,
             vignetteFalloff: falloff,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'duo_4',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'duo_4',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -1993,8 +2126,14 @@ class ExpandedPresets {
             intensity: 0.10,
             seed: 508,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_5',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -2060,8 +2199,14 @@ class ExpandedPresets {
             intensity: grain,
             seed: 602,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_2',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_2',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -2136,8 +2281,14 @@ class ExpandedPresets {
             intensity: aging,
             seed: 603,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_5',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -2200,8 +2351,14 @@ class ExpandedPresets {
             intensity: shimmer,
             seed: 604,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_2',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_2',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -2259,8 +2416,14 @@ class ExpandedPresets {
             intensity: vig * 0.5,
             seed: 605,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_2',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_2',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -2336,8 +2499,14 @@ class ExpandedPresets {
             intensity: porosity,
             seed: 606,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_5',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -2404,8 +2573,14 @@ class ExpandedPresets {
             intensity: grit,
             seed: 607,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_2',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_2',
+        outputNodeId: 'vib_out',
       );
     },
   );
@@ -2481,8 +2656,14 @@ class ExpandedPresets {
             intensity: 0.13,
             seed: 608,
           ),
+          'vib_out': AdaptiveVibrancyNode(
+            id: 'vib_out',
+            inputNodeId: 'grain_5',
+            vibrancy: 0.25,
+            contrast: 0.15,
+          ),
         },
-        outputNodeId: 'grain_5',
+        outputNodeId: 'vib_out',
       );
     },
   );

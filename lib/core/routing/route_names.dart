@@ -9,4 +9,5 @@ class AppRouteNames {
   static const String editor = '/editor/:id';
   static const String recolor = '/editor/:id/recolor';
   static const String humanize = '/editor/:id/humanize';
+  static const String autodraw = '/editor/:id/autodraw';
 }

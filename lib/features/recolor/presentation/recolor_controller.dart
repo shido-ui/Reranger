@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/foundation.dart';
 
 import '../../../domain/color/color_palette.dart';
@@ -6,6 +8,10 @@ import '../../../domain/recipes/recolor_render_node.dart';
 import '../../../domain/recipes/render_graph.dart';
 import '../../../domain/recipes/render_graph_node.dart';
 import '../../../domain/scene_map/color_region_map_data.dart';
+import '../../../domain/segmentation/smart_select_category.dart';
+import '../../../domain/segmentation/edgetam_coordinate_mapper.dart';
+import '../../../domain/segmentation/edgetam_embedding.dart';
+import '../../../data/segmentation/edgetam_segmentation_service.dart';
 
 /// Immutable snapshot representing the editing state of Recolor Studio.
 class RecolorState {
@@ -23,6 +29,9 @@ class RecolorState {
   final bool canUndo;
   final bool canRedo;
   final bool semanticSegmentationAvailable;
+  final SmartSelectCategory activeSmartCategory;
+  final bool isSmartSelectMode;
+  final bool isSegmenting;
   final String? statusMessage;
 
   const RecolorState({
@@ -39,7 +48,10 @@ class RecolorState {
     this.isComparing = false,
     this.canUndo = false,
     this.canRedo = false,
-    this.semanticSegmentationAvailable = false,
+    this.semanticSegmentationAvailable = true,
+    this.activeSmartCategory = SmartSelectCategory.hair,
+    this.isSmartSelectMode = false,
+    this.isSegmenting = false,
     this.statusMessage,
   });
 
@@ -69,6 +81,9 @@ class RecolorState {
     bool? canUndo,
     bool? canRedo,
     bool? semanticSegmentationAvailable,
+    SmartSelectCategory? activeSmartCategory,
+    bool? isSmartSelectMode,
+    bool? isSegmenting,
     String? statusMessage,
     bool clearTargetColor = false,
     bool clearActiveMask = false,
@@ -89,6 +104,9 @@ class RecolorState {
       canRedo: canRedo ?? this.canRedo,
       semanticSegmentationAvailable:
           semanticSegmentationAvailable ?? this.semanticSegmentationAvailable,
+      activeSmartCategory: activeSmartCategory ?? this.activeSmartCategory,
+      isSmartSelectMode: isSmartSelectMode ?? this.isSmartSelectMode,
+      isSegmenting: isSegmenting ?? this.isSegmenting,
       statusMessage: statusMessage ?? this.statusMessage,
     );
   }
@@ -105,6 +123,8 @@ class RecolorController extends ChangeNotifier {
   final int imageWidth;
   final int imageHeight;
   final String sourceImageHash;
+  final EdgeTamSegmentationService segmentationService;
+  EdgeTamEmbedding? cachedEmbedding;
 
   RecolorState _state;
   final List<RecolorState> _undoStack = [];
@@ -117,7 +137,10 @@ class RecolorController extends ChangeNotifier {
     required this.sourceImageHash,
     ColorPalette? initialPalette,
     ColorRegionMapData? colorRegionMap,
-  }) : _state = const RecolorState() {
+    EdgeTamSegmentationService? segmentationService,
+  }) : segmentationService =
+           segmentationService ?? EdgeTamSegmentationService(),
+       _state = const RecolorState() {
     _initialize(initialPalette: initialPalette, colorRegionMap: colorRegionMap);
   }
 
@@ -183,8 +206,93 @@ class RecolorController extends ChangeNotifier {
       isComparing: false,
       canUndo: false,
       canRedo: false,
-      semanticSegmentationAvailable:
-          false, // Invariant 7: Honest capability flag
+      semanticSegmentationAvailable: true,
+      activeSmartCategory: SmartSelectCategory.hair,
+      isSmartSelectMode: true,
+    );
+
+    // Pre-calculate ViT image embeddings on image load (Stage 1: Encode once)
+    _encodeImageOnLoad();
+  }
+
+  Future<void> _encodeImageOnLoad() async {
+    try {
+      cachedEmbedding = await segmentationService.encodeImage(
+        rgbaBytes: sourceRgba,
+        width: imageWidth,
+        height: imageHeight,
+      );
+    } catch (_) {}
+  }
+
+  /// Sets active smart segmentation category hint (Hair, Face, Clothing, Background).
+  void setSmartSelectCategory(SmartSelectCategory category) {
+    _updateState(_state.copyWith(activeSmartCategory: category));
+  }
+
+  /// Toggles smart select tap-to-recolor mode.
+  void toggleSmartSelectMode(bool enabled) {
+    _updateState(_state.copyWith(isSmartSelectMode: enabled));
+  }
+
+  /// Interactive Tap-to-Recolor entry point.
+  /// Executes: View -> Source Bitmap (undo letterbox) -> Padded 1024x1024 Square (top-left pad),
+  /// triggers EdgeTAM decoder on tap, and resamples resulting mask back to source bitmap.
+  Future<void> handleCanvasTap({
+    required double viewX,
+    required double viewY,
+    required Size viewSize,
+  }) async {
+    final coords = EdgeTamCoordinateMapper.mapViewToPadded(
+      viewPosition: Offset(viewX, viewY),
+      viewSize: viewSize,
+      sourceWidth: imageWidth,
+      sourceHeight: imageHeight,
+    );
+
+    if (!coords.isInsideImage) return;
+
+    _updateState(_state.copyWith(isSegmenting: true));
+
+    try {
+      cachedEmbedding ??= await segmentationService.encodeImage(
+        rgbaBytes: sourceRgba,
+        width: imageWidth,
+        height: imageHeight,
+      );
+
+      final mask = await segmentationService.decodeTapPrompt(
+        embedding: cachedEmbedding!,
+        coordinates: coords,
+        category: _state.activeSmartCategory,
+      );
+
+      _recordUndo();
+
+      _updateState(
+        _state.copyWith(
+          activeMask: mask,
+          isMaskPreviewActive: true,
+          isSegmenting: false,
+          canUndo: _undoStack.isNotEmpty,
+          canRedo: false,
+        ),
+      );
+    } catch (e) {
+      _updateState(_state.copyWith(isSegmenting: false));
+    }
+  }
+
+  /// Explicitly applies an externally generated or decoded mask.
+  void applySmartSelectMask(RegionMask mask) {
+    _recordUndo();
+    _updateState(
+      _state.copyWith(
+        activeMask: mask,
+        isMaskPreviewActive: true,
+        canUndo: _undoStack.isNotEmpty,
+        canRedo: false,
+      ),
     );
   }
 
@@ -386,6 +494,19 @@ class RecolorController extends ChangeNotifier {
     _updateState(
       _state.copyWith(
         activeMask: smoothed,
+        canUndo: _undoStack.isNotEmpty,
+        canRedo: false,
+      ),
+    );
+  }
+
+  /// Clears the active mask to allow unmasked recoloring.
+  void clearActiveMask() {
+    _recordUndo();
+    _updateState(
+      _state.copyWith(
+        clearActiveMask: true,
+        isMaskPreviewActive: false,
         canUndo: _undoStack.isNotEmpty,
         canRedo: false,
       ),

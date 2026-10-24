@@ -1,0 +1,224 @@
+import 'dart:async';
+import 'dart:isolate';
+import 'dart:typed_data';
+import 'dart:ui';
+
+import '../domain/autodraw_models.dart';
+
+class _VectorizeTaskParams {
+  final Uint8List rgbaBytes;
+  final int width;
+  final int height;
+  final int maxPaths;
+
+  const _VectorizeTaskParams({
+    required this.rgbaBytes,
+    required this.width,
+    required this.height,
+    required this.maxPaths,
+  });
+}
+
+/// Service executing Potrace contour extraction and Bézier curve fitting.
+/// Invariant: Always executes vectorization on a background isolate.
+class PotraceVectorizer {
+  const PotraceVectorizer();
+
+  /// Vectorizes an RGBA8888 image into sorted Bézier curves (Background -> Midtones -> Highlights).
+  /// Execution is strictly offloaded to a background isolate via [Isolate.run].
+  Future<AutodrawVectorizationResult> vectorizeImage({
+    required Uint8List rgbaBytes,
+    required int width,
+    required int height,
+    int maxPaths = 180,
+  }) async {
+    final params = _VectorizeTaskParams(
+      rgbaBytes: rgbaBytes,
+      width: width,
+      height: height,
+      maxPaths: maxPaths,
+    );
+
+    // Guaranteed execution on a background isolate
+    return await Isolate.run(() => _vectorizeWorker(params));
+  }
+
+  /// Worker function executing on the background isolate.
+  static AutodrawVectorizationResult _vectorizeWorker(
+    _VectorizeTaskParams params,
+  ) {
+    final width = params.width;
+    final height = params.height;
+    final total = width * height;
+    final rgba = params.rgbaBytes;
+
+    if (total == 0 || rgba.length < total * 4) {
+      return AutodrawVectorizationResult(
+        width: width,
+        height: height,
+        strokes: [],
+      );
+    }
+
+    // 1. Luminance computation
+    final lum = Uint8List(total);
+    for (int i = 0; i < total; i++) {
+      final off = i * 4;
+      lum[i] =
+          (0.299 * rgba[off] + 0.587 * rgba[off + 1] + 0.114 * rgba[off + 2])
+              .round()
+              .clamp(0, 255);
+    }
+
+    final bgStrokes = <AutodrawStroke>[];
+    final midStrokes = <AutodrawStroke>[];
+    final hiStrokes = <AutodrawStroke>[];
+
+    final maxPerBand = (params.maxPaths / 3).ceil().clamp(10, 100);
+
+    // 2. Trace each tonal band in deterministic order
+    void traceTonalBand(
+      AutodrawTonalLayer layer,
+      List<AutodrawStroke> outList,
+      double strokeWidth,
+    ) {
+      final mask = Uint8List(total);
+      int bandPixels = 0;
+      int sumR = 0, sumG = 0, sumB = 0;
+
+      for (int i = 0; i < total; i++) {
+        final l = lum[i];
+        bool inBand = false;
+        if (layer == AutodrawTonalLayer.background) {
+          inBand = l < 85;
+        } else if (layer == AutodrawTonalLayer.midtones) {
+          inBand = l >= 85 && l < 170;
+        } else {
+          inBand = l >= 170;
+        }
+
+        if (inBand) {
+          mask[i] = 1;
+          bandPixels++;
+          final off = i * 4;
+          sumR += rgba[off];
+          sumG += rgba[off + 1];
+          sumB += rgba[off + 2];
+        }
+      }
+
+      if (bandPixels == 0) return;
+
+      final avgR = (sumR / bandPixels).round().clamp(0, 255);
+      final avgG = (sumG / bandPixels).round().clamp(0, 255);
+      final avgB = (sumB / bandPixels).round().clamp(0, 255);
+      final strokeColor = Color.fromARGB(255, avgR, avgG, avgB);
+
+      final visited = Uint8List(total);
+
+      for (int y = 1; y < height - 1; y++) {
+        for (int x = 1; x < width - 1; x++) {
+          if (outList.length >= maxPerBand) break;
+          final idx = y * width + x;
+          if (mask[idx] == 0 || visited[idx] == 1) continue;
+
+          // Boundary edge detection
+          final isEdge =
+              mask[idx - 1] == 0 ||
+              mask[idx + 1] == 0 ||
+              mask[idx - width] == 0 ||
+              mask[idx + width] == 0;
+          if (!isEdge) continue;
+
+          // Trace boundary contour
+          final contour = <Offset>[];
+          int currX = x;
+          int currY = y;
+
+          for (int step = 0; step < 64; step++) {
+            visited[currY * width + currX] = 1;
+            contour.add(Offset(currX.toDouble(), currY.toDouble()));
+
+            int nextX = -1, nextY = -1;
+            const dx = [1, 1, 0, -1, -1, -1, 0, 1];
+            const dy = [0, 1, 1, 1, 0, -1, -1, -1];
+
+            for (int d = 0; d < 8; d++) {
+              final nx = currX + dx[d];
+              final ny = currY + dy[d];
+              if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                final nidx = ny * width + nx;
+                if (mask[nidx] == 1 && visited[nidx] == 0) {
+                  nextX = nx;
+                  nextY = ny;
+                  break;
+                }
+              }
+            }
+            if (nextX == -1) break;
+            currX = nextX;
+            currY = nextY;
+          }
+
+          if (contour.length < 2) continue;
+
+          // Polygon simplification (sample key points)
+          final simplified = <Offset>[contour.first];
+          for (int k = 2; k < contour.length - 1; k += 2) {
+            simplified.add(contour[k]);
+          }
+          simplified.add(contour.last);
+
+          final numSegs = simplified.length - 1;
+          if (numSegs <= 0) continue;
+
+          // Fit cubic Bézier segments with C1 continuity
+          final segments = <BezierSegment>[];
+          for (int s = 0; s < numSegs; s++) {
+            final p0 = simplified[s];
+            final p3 = simplified[s + 1];
+
+            final prev = s > 0 ? simplified[s - 1] : p0;
+            final next = s + 2 < simplified.length ? simplified[s + 2] : p3;
+
+            final t0 = (p3 - prev) * 0.35;
+            final t3 = (next - p0) * 0.35;
+
+            final cp1 = p0 + t0 / 3.0;
+            final cp2 = p3 - t3 / 3.0;
+
+            segments.add(BezierSegment(cp1: cp1, cp2: cp2, end: p3));
+          }
+
+          outList.add(
+            AutodrawStroke(
+              id: outList.length + 1,
+              layer: layer,
+              color: strokeColor,
+              strokeWidth: strokeWidth,
+              startPoint: simplified.first,
+              segments: segments,
+            ),
+          );
+        }
+      }
+    }
+
+    // Trace in strict order: Background (stroke 2.5) -> Midtones (stroke 2.0) -> Highlights (stroke 1.5)
+    traceTonalBand(AutodrawTonalLayer.background, bgStrokes, 2.5);
+    traceTonalBand(AutodrawTonalLayer.midtones, midStrokes, 2.0);
+    traceTonalBand(AutodrawTonalLayer.highlights, hiStrokes, 1.5);
+
+    final allStrokes = <AutodrawStroke>[
+      ...bgStrokes,
+      ...midStrokes,
+      ...hiStrokes,
+    ];
+
+    return AutodrawVectorizationResult(
+      width: width,
+      height: height,
+      strokes: allStrokes,
+    );
+  }
+}

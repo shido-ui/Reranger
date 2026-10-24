@@ -447,8 +447,8 @@ void main() {
       expect(controller.state.canRedo, isFalse);
       expect(
         controller.state.semanticSegmentationAvailable,
-        isFalse,
-      ); // Honest reporting
+        isTrue,
+      ); // EdgeTAM semantic segmentation integrated
 
       // 1. Set target color
       controller.setTargetColor(const ColorRgb(0, 255, 0));

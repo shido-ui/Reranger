@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../features/autodraw/presentation/autodraw_screen.dart';
 import '../../features/creations/presentation/creations_screen.dart';
 import '../../features/editor/presentation/editor_screen.dart';
 import '../../features/home/presentation/home_screen.dart';
@@ -87,6 +88,14 @@ final GoRouter appRouter = GoRouter(
       builder: (context, state) {
         final id = state.pathParameters['id'] ?? 'unknown';
         return HumanizeScreenHost(projectId: id);
+      },
+    ),
+    GoRoute(
+      parentNavigatorKey: _rootNavigatorKey,
+      path: AppRouteNames.autodraw,
+      builder: (context, state) {
+        final id = state.pathParameters['id'] ?? 'unknown';
+        return AutodrawScreen(projectId: id);
       },
     ),
   ],

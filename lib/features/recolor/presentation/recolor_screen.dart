@@ -11,6 +11,7 @@ import '../../../core/theme/spacing_tokens.dart';
 import '../../../domain/color/color_palette.dart';
 import '../../../domain/layers/editor_layer.dart';
 import '../../../domain/layers/history_command.dart';
+import '../../../domain/segmentation/smart_select_category.dart';
 import '../../editor/presentation/editor_providers.dart';
 import 'recolor_controller.dart';
 
@@ -175,12 +176,10 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
     final outBytes = Uint8List(w * h * 4);
     final src = ctrl.sourceRgba;
 
-    if (state.isComparing ||
-        state.targetColor == null ||
-        state.activeSourceColor == null) {
+    if (state.isComparing) {
       outBytes.setAll(0, src);
     } else {
-      final target = state.targetColor!;
+      final target = state.targetColor;
       final mask = state.activeMask;
 
       for (int i = 0; i < w * h; i++) {
@@ -204,29 +203,38 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
           }
         }
 
-        final maskWeight =
-            ((mask != null && i < mask.buffer.length) ? mask.buffer[i] : 255) /
-            255.0;
-        final effectiveWeight = maskWeight * state.strength;
+        if (target != null) {
+          final maskWeight =
+              ((mask != null && i < mask.buffer.length)
+                  ? mask.buffer[i]
+                  : 255) /
+              255.0;
+          final effectiveWeight = maskWeight * state.strength;
 
-        if (effectiveWeight > 1e-3) {
-          final blendedR =
-              (r * (1.0 - effectiveWeight) + target.r * effectiveWeight)
-                  .round()
-                  .clamp(0, 255);
-          final blendedG =
-              (g * (1.0 - effectiveWeight) + target.g * effectiveWeight)
-                  .round()
-                  .clamp(0, 255);
-          final blendedB =
-              (b * (1.0 - effectiveWeight) + target.b * effectiveWeight)
-                  .round()
-                  .clamp(0, 255);
+          if (effectiveWeight > 1e-3) {
+            final blendedR =
+                (r * (1.0 - effectiveWeight) + target.r * effectiveWeight)
+                    .round()
+                    .clamp(0, 255);
+            final blendedG =
+                (g * (1.0 - effectiveWeight) + target.g * effectiveWeight)
+                    .round()
+                    .clamp(0, 255);
+            final blendedB =
+                (b * (1.0 - effectiveWeight) + target.b * effectiveWeight)
+                    .round()
+                    .clamp(0, 255);
 
-          outBytes[off] = blendedR;
-          outBytes[off + 1] = blendedG;
-          outBytes[off + 2] = blendedB;
-          outBytes[off + 3] = a;
+            outBytes[off] = blendedR;
+            outBytes[off + 1] = blendedG;
+            outBytes[off + 2] = blendedB;
+            outBytes[off + 3] = a;
+          } else {
+            outBytes[off] = r;
+            outBytes[off + 1] = g;
+            outBytes[off + 2] = b;
+            outBytes[off + 3] = a;
+          }
         } else {
           outBytes[off] = r;
           outBytes[off + 1] = g;
@@ -397,50 +405,193 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
             )
           : Column(
               children: [
-                // Viewport with hold-to-compare
+                // Viewport with hold-to-compare and Tap-to-Recolor (EdgeTAM)
                 Expanded(
                   flex: 5,
-                  child: GestureDetector(
-                    onLongPressStart: (_) => ctrl?.setComparing(true),
-                    onLongPressEnd: (_) => ctrl?.setComparing(false),
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        Container(
-                          color: Colors.black,
-                          width: double.infinity,
-                          height: double.infinity,
-                          child: _previewPng != null
-                              ? Image.memory(_previewPng!, fit: BoxFit.contain)
-                              : const Center(
-                                  child: CircularProgressIndicator(),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      return GestureDetector(
+                        onLongPressStart: (_) => ctrl?.setComparing(true),
+                        onLongPressEnd: (_) => ctrl?.setComparing(false),
+                        onTapUp: (details) {
+                          if (ctrl == null) return;
+                          ctrl.handleCanvasTap(
+                            viewX: details.localPosition.dx,
+                            viewY: details.localPosition.dy,
+                            viewSize: Size(
+                              constraints.maxWidth,
+                              constraints.maxHeight,
+                            ),
+                          );
+                        },
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            Container(
+                              color: Colors.black,
+                              width: double.infinity,
+                              height: double.infinity,
+                              child: _previewPng != null
+                                  ? Image.memory(
+                                      _previewPng!,
+                                      fit: BoxFit.contain,
+                                    )
+                                  : const Center(
+                                      child: CircularProgressIndicator(),
+                                    ),
+                            ),
+                            if (ctrl?.state.isSegmenting == true)
+                              Container(
+                                color: Colors.black45,
+                                child: const Center(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      CircularProgressIndicator(
+                                        color: Colors.white,
+                                      ),
+                                      SizedBox(height: 8),
+                                      Text(
+                                        'Segmenting with EdgeTAM...',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                        ),
-                        if (ctrl?.state.isComparing == true)
-                          Positioned(
-                            top: AppSpacingTokens.md,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 6,
                               ),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.75),
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(color: Colors.white24),
+                            if (ctrl?.state.isComparing == true)
+                              Positioned(
+                                top: AppSpacingTokens.md,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withValues(alpha: 0.75),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(color: Colors.white24),
+                                  ),
+                                  child: const Text(
+                                    'ORIGINAL PHOTO',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
                               ),
-                              child: const Text(
-                                'ORIGINAL PHOTO',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
+                            // Floating Smart Select pills over canvas
+                            Positioned(
+                              bottom: 12,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.70),
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: Colors.white24),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      Icons.touch_app,
+                                      size: 14,
+                                      color: Colors.white70,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    ...[
+                                      SmartSelectCategory.hair,
+                                      SmartSelectCategory.face,
+                                      SmartSelectCategory.clothing,
+                                      SmartSelectCategory.background,
+                                    ].map((cat) {
+                                      final isSelected =
+                                          ctrl?.state.activeSmartCategory ==
+                                          cat;
+                                      return Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 3,
+                                        ),
+                                        child: Listener(
+                                          behavior: HitTestBehavior.opaque,
+                                          onPointerUp: (_) {
+                                            ctrl?.setSmartSelectCategory(cat);
+                                          },
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 10,
+                                              vertical: 4,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: isSelected
+                                                  ? accentColor
+                                                  : Colors.white.withValues(
+                                                      alpha: 0.15,
+                                                    ),
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                            ),
+                                            child: Text(
+                                              cat.label,
+                                              style: TextStyle(
+                                                color: isSelected
+                                                    ? Colors.white
+                                                    : Colors.white70,
+                                                fontWeight: isSelected
+                                                    ? FontWeight.bold
+                                                    : FontWeight.normal,
+                                                fontSize: 11,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    }),
+                                    if (ctrl?.state.activeMask != null) ...[
+                                      const SizedBox(width: 4),
+                                      Listener(
+                                        behavior: HitTestBehavior.opaque,
+                                        onPointerUp: (_) =>
+                                            ctrl?.clearActiveMask(),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 4,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Colors.red.withValues(
+                                              alpha: 0.4,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                          ),
+                                          child: const Text(
+                                            'Clear',
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 11,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
                                 ),
                               ),
                             ),
-                          ),
-                      ],
-                    ),
+                          ],
+                        ),
+                      );
+                    },
                   ),
                 ),
 
