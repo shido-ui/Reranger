@@ -745,8 +745,8 @@ class RenderGraphExecutor {
   ]) {
     final total = w * h;
     final dst = Uint8List(total * 4);
-    // Strictly cap opacity to max 0.08 (Mandate 2) to eliminate TV static
-    final effIntensity = (intensity * 0.25).clamp(0.01, 0.08);
+    // Coherent grain intensity bounded to prevent harsh static while preserving dynamic range
+    final effIntensity = intensity.clamp(0.02, 0.40);
 
     for (int y = 0; y < h; y++) {
       if ((y & 15) == 0 && isCancelled != null && isCancelled()) {
@@ -771,8 +771,10 @@ class RenderGraphExecutor {
 
         for (int c = 0; c < 3; c++) {
           final rawNorm = src[off + c] / 255.0;
-          final soft = _blendSoftLight(rawNorm, blendNorm);
-          final blended = rawNorm + (soft - rawNorm) * alphaFactor;
+          final baseNorm = rawNorm.clamp(0.04, 0.96);
+          final soft = _blendSoftLight(baseNorm, blendNorm);
+          final textured = rawNorm + (soft - baseNorm);
+          final blended = rawNorm + (textured - rawNorm) * alphaFactor;
           dst[off + c] = (blended * 255.0).round().clamp(0, 255);
         }
         dst[off + 3] = a;

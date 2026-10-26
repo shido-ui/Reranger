@@ -15,9 +15,12 @@ import 'package:reranger/features/settings/presentation/settings_screen.dart';
 
 void main() {
   group('Responsive Viewport & Font Scale Overflow Matrix', () {
-    // Single baseline viewport (360x800 at 1.0 scale) for local PRoot container CI.
-    // Full 32-viewport matrix is deferred to the physical Mobile MCP Cloud Device (Google Pixel 10).
-    const widths = [360.0];
+    // Matrix viewports: 320x640 (narrow phone), 412x915 (standard phone), 768x1024 (tablet)
+    const viewports = [
+      Size(320.0, 640.0),
+      Size(412.0, 915.0),
+      Size(768.0, 1024.0),
+    ];
     const fontScales = [1.0];
 
     late Directory tempDir;
@@ -42,12 +45,12 @@ void main() {
       }
     });
 
-    for (final width in widths) {
+    for (final vp in viewports) {
       for (final fontScale in fontScales) {
         testWidgets(
-          'HomeScreen: No overflow at width $width with fontScale $fontScale',
+          'HomeScreen: No overflow at ${vp.width}x${vp.height} with fontScale $fontScale',
           (tester) async {
-            tester.view.physicalSize = Size(width * 2.0, 800.0 * 2.0);
+            tester.view.physicalSize = Size(vp.width * 2.0, vp.height * 2.0);
             tester.view.devicePixelRatio = 2.0;
             addTearDown(tester.view.resetPhysicalSize);
             addTearDown(tester.view.resetDevicePixelRatio);
@@ -58,7 +61,7 @@ void main() {
                   theme: AppTheme.darkTheme,
                   home: MediaQuery(
                     data: MediaQueryData(
-                      size: Size(width, 800.0),
+                      size: vp,
                       textScaler: TextScaler.linear(fontScale),
                     ),
                     child: const HomeScreen(),
@@ -75,9 +78,9 @@ void main() {
         );
 
         testWidgets(
-          'CreationsScreen: No overflow at width $width with fontScale $fontScale',
+          'CreationsScreen: No overflow at ${vp.width}x${vp.height} with fontScale $fontScale',
           (tester) async {
-            tester.view.physicalSize = Size(width * 2.0, 800.0 * 2.0);
+            tester.view.physicalSize = Size(vp.width * 2.0, vp.height * 2.0);
             tester.view.devicePixelRatio = 2.0;
             addTearDown(tester.view.resetPhysicalSize);
             addTearDown(tester.view.resetDevicePixelRatio);
@@ -88,7 +91,7 @@ void main() {
                   theme: AppTheme.darkTheme,
                   home: MediaQuery(
                     data: MediaQueryData(
-                      size: Size(width, 800.0),
+                      size: vp,
                       textScaler: TextScaler.linear(fontScale),
                     ),
                     child: const CreationsScreen(),
@@ -104,9 +107,9 @@ void main() {
         );
 
         testWidgets(
-          'SettingsScreen: No overflow at width $width with fontScale $fontScale',
+          'SettingsScreen: No overflow at ${vp.width}x${vp.height} with fontScale $fontScale',
           (tester) async {
-            tester.view.physicalSize = Size(width * 2.0, 800.0 * 2.0);
+            tester.view.physicalSize = Size(vp.width * 2.0, vp.height * 2.0);
             tester.view.devicePixelRatio = 2.0;
             addTearDown(tester.view.resetPhysicalSize);
             addTearDown(tester.view.resetDevicePixelRatio);
@@ -117,7 +120,7 @@ void main() {
                   theme: AppTheme.darkTheme,
                   home: MediaQuery(
                     data: MediaQueryData(
-                      size: Size(width, 800.0),
+                      size: vp,
                       textScaler: TextScaler.linear(fontScale),
                     ),
                     child: const SettingsScreen(),
@@ -133,9 +136,9 @@ void main() {
         );
 
         testWidgets(
-          'AnalysisScreen: No overflow at width $width with fontScale $fontScale',
+          'AnalysisScreen: No overflow at ${vp.width}x${vp.height} with fontScale $fontScale',
           (tester) async {
-            tester.view.physicalSize = Size(width * 2.0, 800.0 * 2.0);
+            tester.view.physicalSize = Size(vp.width * 2.0, vp.height * 2.0);
             tester.view.devicePixelRatio = 2.0;
             addTearDown(tester.view.resetPhysicalSize);
             addTearDown(tester.view.resetDevicePixelRatio);
@@ -154,7 +157,7 @@ void main() {
                   theme: AppTheme.darkTheme,
                   home: MediaQuery(
                     data: MediaQueryData(
-                      size: Size(width, 800.0),
+                      size: vp,
                       textScaler: TextScaler.linear(fontScale),
                     ),
                     child: AnalysisScreen(controller: inProgressController),

@@ -168,14 +168,12 @@ void main() {
         );
         final defaultHash = sha256.convert(defaultResult.pixelBytes).toString();
 
-        // Adjust primary parameter to maximum or minimum (whichever is farther from default)
+        // Adjust primary parameter to maximum or minimum (whichever is farther from default, tie-breaks to max)
         final param0 = p.parameters.first;
         final alteredParams = Map<String, double>.from(defaultParams);
-        final testVal =
-            (param0.max - param0.defaultValue).abs() >=
-                (param0.defaultValue - param0.min).abs()
-            ? param0.max
-            : param0.min;
+        final diffMax = (param0.max - param0.defaultValue).abs();
+        final diffMin = (param0.defaultValue - param0.min).abs();
+        final testVal = (diffMax - diffMin) >= -1e-6 ? param0.max : param0.min;
         alteredParams[param0.id] = testVal;
 
         final alteredGraph = p.buildGraph(sourceHash, 32, 32, alteredParams);
