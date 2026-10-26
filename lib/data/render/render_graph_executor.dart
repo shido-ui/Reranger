@@ -10,13 +10,13 @@ import '../../domain/recipes/render_graph_node.dart';
 import '../../domain/recipes/render_pipeline_failure.dart';
 import '../../domain/recipes/style_render_nodes.dart';
 import '../../domain/recipes/recolor_render_node.dart';
-import '../../domain/color/color_palette.dart';
 import '../../domain/color/recolor_mask.dart';
 import '../../domain/recipes/adversarial_stealth_node.dart';
 import '../../domain/recipes/pixelate_quantize_node.dart';
 import '../../domain/recipes/artistic_render_nodes.dart';
 import '../../domain/recipes/blend_composite_node.dart';
 import '../../domain/recipes/adaptive_vibrancy_node.dart';
+import '../../domain/segmentation/cielab_magic_wand_service.dart';
 import '../../domain/layers/editor_layer.dart';
 import 'render_node_cache.dart';
 
@@ -1047,8 +1047,6 @@ class RenderGraphExecutor {
       }
     }
 
-    final targetHsl = ColorRgb(targetR, targetG, targetB).toHsl();
-    final sourceHsl = ColorRgb(sourceR, sourceG, sourceB).toHsl();
     const maxDist = 441.67295593; // 255 * sqrt(3)
     final tolDist = tolerance * maxDist;
     final featherDist = feather * maxDist;
@@ -1103,44 +1101,20 @@ class RenderGraphExecutor {
       final effectiveWeight = (maskWeight * strength * effectiveAlphaFactor)
           .clamp(0.0, 1.0);
 
-      // Input pixel BT.601 integer luminance: (299*R + 587*G + 114*B) / 1000
-      final yIn = (299 * rIn + 587 * gIn + 114 * bIn) ~/ 1000;
-
       int rRec, gRec, bRec;
 
       if (preserveLuminance) {
-        final inHsl = ColorRgb(rIn, gIn, bIn).toHsl();
-
-        double satDampen = 1.0;
-        if (sourceHsl.s >= 0.08 && inHsl.s < 0.08) {
-          satDampen = (inHsl.s / 0.08).clamp(0.0, 1.0);
-        }
-
-        final blendSat = targetHsl.s * satDampen;
-        final candidateRgb = ColorHsl(targetHsl.h, blendSat, inHsl.l).toRgb();
-
-        final yCand =
-            (299 * candidateRgb.r +
-                587 * candidateRgb.g +
-                114 * candidateRgb.b) ~/
-            1000;
-
-        if (yCand > 0) {
-          final k = yIn / yCand;
-          var rScaled = (candidateRgb.r * k).round().clamp(0, 255);
-          var gScaled = (candidateRgb.g * k).round().clamp(0, 255);
-          var bScaled = (candidateRgb.b * k).round().clamp(0, 255);
-
-          final residual =
-              yIn - (299 * rScaled + 587 * gScaled + 114 * bScaled) ~/ 1000;
-          rRec = (rScaled + residual).clamp(0, 255);
-          gRec = (gScaled + residual).clamp(0, 255);
-          bRec = (bScaled + residual).clamp(0, 255);
-        } else {
-          rRec = yIn;
-          gRec = yIn;
-          bRec = yIn;
-        }
+        final rec = CielabMagicWandService.recolorLuminancePreserving(
+          rIn: rIn,
+          gIn: gIn,
+          bIn: bIn,
+          targetR: targetR,
+          targetG: targetG,
+          targetB: targetB,
+        );
+        rRec = rec[0];
+        gRec = rec[1];
+        bRec = rec[2];
       } else {
         rRec = targetR;
         gRec = targetG;

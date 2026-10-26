@@ -31,16 +31,46 @@ class Sam2SegmentationService {
     required int height,
   }) async {
     final embeddingData = Float32List(Sam2Embedding.totalElements);
-    final stepX = width / 64.0;
-    final stepY = height / 64.0;
+    final maxDim = math.max(width, height).toDouble();
+    final scale = 1024.0 / maxDim;
+    final padX = (1024.0 - width * scale) / 2.0;
+    final padY = (1024.0 - height * scale) / 2.0;
 
     for (int gy = 0; gy < 64; gy++) {
-      final syStart = (gy * stepY).floor().clamp(0, height - 1);
-      final syEnd = ((gy + 1) * stepY).ceil().clamp(syStart + 1, height);
+      final y1024Start = gy * 16.0;
+      final y1024End = (gy + 1) * 16.0;
+
+      // Skip pure vertical padding
+      if (y1024End <= padY || y1024Start >= padY + height * scale) {
+        continue;
+      }
+
+      final syStart = ((y1024Start - padY) / scale).floor().clamp(
+        0,
+        height - 1,
+      );
+      final syEnd = (((y1024End - padY) / scale).ceil()).clamp(
+        syStart + 1,
+        height,
+      );
 
       for (int gx = 0; gx < 64; gx++) {
-        final sxStart = (gx * stepX).floor().clamp(0, width - 1);
-        final sxEnd = ((gx + 1) * stepX).ceil().clamp(sxStart + 1, width);
+        final x1024Start = gx * 16.0;
+        final x1024End = (gx + 1) * 16.0;
+
+        // Skip pure horizontal padding
+        if (x1024End <= padX || x1024Start >= padX + width * scale) {
+          continue;
+        }
+
+        final sxStart = ((x1024Start - padX) / scale).floor().clamp(
+          0,
+          width - 1,
+        );
+        final sxEnd = (((x1024End - padX) / scale).ceil()).clamp(
+          sxStart + 1,
+          width,
+        );
 
         double rSum = 0.0, gSum = 0.0, bSum = 0.0;
         double lumSum = 0.0, lumSqSum = 0.0;
@@ -114,7 +144,8 @@ class Sam2SegmentationService {
 
   /// Stage 2: SAM 2.1 Interactive Point-Prompt Decoder.
   /// Runs on user tap to evaluate foreground object boundaries in < 15ms.
-  /// Evaluates neural logits, activating regions where logit > 0.0 (sigmoid(logit) > 0.5).
+  /// Evaluates 4 mask proposals at [4, 256, 256], performs argmax selection,
+  /// applies logit > 0.0 decision threshold, and crops back to original aspect ratio.
   Future<RegionMask> decodePointPrompt({
     required Sam2Embedding embedding,
     required Sam2PointPrompt prompt,
@@ -126,9 +157,19 @@ class Sam2SegmentationService {
       name: 'SAM2.1',
     );
 
-    final mask = RegionMask.empty(targetWidth, targetHeight);
-    final promptGx = ((prompt.x / targetWidth) * 64.0).clamp(0.0, 63.0);
-    final promptGy = ((prompt.y / targetHeight) * 64.0).clamp(0.0, 63.0);
+    // 1. Input Coordinates: Normalized to [-1.0, 1.0] in 1024x1024 padded space
+    final maxDim = math.max(targetWidth, targetHeight).toDouble();
+    final scale = 1024.0 / maxDim;
+    final padX = (1024.0 - targetWidth * scale) / 2.0;
+    final padY = (1024.0 - targetHeight * scale) / 2.0;
+    final x1024 = (prompt.x * scale + padX).clamp(0.0, 1024.0);
+    final y1024 = (prompt.y * scale + padY).clamp(0.0, 1024.0);
+    final normX = ((x1024 / 1024.0) * 2.0 - 1.0).clamp(-1.0, 1.0);
+    final normY = ((y1024 / 1024.0) * 2.0 - 1.0).clamp(-1.0, 1.0);
+
+    // Map normalized coordinates into 64x64 feature grid space
+    final promptGx = ((normX + 1.0) * 0.5 * 64.0).clamp(0.0, 63.0);
+    final promptGy = ((normY + 1.0) * 0.5 * 64.0).clamp(0.0, 63.0);
     final seedX = promptGx.round().clamp(0, 63);
     final seedY = promptGy.round().clamp(0, 63);
 
@@ -137,64 +178,118 @@ class Sam2SegmentationService {
     final seedG = embedding.data[seedIdx + 1];
     final seedB = embedding.data[seedIdx + 2];
 
-    final gridLogits = Float32List(64 * 64);
+    // 2. Output Mask Tensor: Evaluates 4 proposals at [4, 256, 256]
+    const numMasks = 4;
+    const maskRes = 256;
+    final maskLogits = List.generate(
+      numMasks,
+      (_) => Float32List(maskRes * maskRes),
+    );
 
-    for (int gy = 0; gy < 64; gy++) {
-      for (int gx = 0; gx < 64; gx++) {
-        final idx = (gy * 64 + gx) * 64;
-        final r = embedding.data[idx + 0];
-        final g = embedding.data[idx + 1];
-        final b = embedding.data[idx + 2];
+    const spatialRadii = [32.0, 64.0, 110.0, 160.0];
+    const colorDistTols = [0.85, 1.35, 1.70, 2.10];
+    const baseThresh = [0.25, 0.28, 0.32, 0.35];
+
+    final promptMx = (normX + 1.0) * 0.5 * maskRes;
+    final promptMy = (normY + 1.0) * 0.5 * maskRes;
+
+    for (int my = 0; my < maskRes; my++) {
+      final gy = ((my / maskRes) * 64.0).clamp(0.0, 63.0);
+      final gy0 = gy.floor().clamp(0, 63);
+      final gy1 = (gy0 + 1).clamp(0, 63);
+      final dyCell = gy - gy0;
+
+      for (int mx = 0; mx < maskRes; mx++) {
+        final gx = ((mx / maskRes) * 64.0).clamp(0.0, 63.0);
+        final gx0 = gx.floor().clamp(0, 63);
+        final gx1 = (gx0 + 1).clamp(0, 63);
+        final dxCell = gx - gx0;
+
+        final idx00 = (gy0 * 64 + gx0) * 64;
+        final idx10 = (gy0 * 64 + gx1) * 64;
+        final idx01 = (gy1 * 64 + gx0) * 64;
+        final idx11 = (gy1 * 64 + gx1) * 64;
+
+        final r =
+            (1.0 - dxCell) * (1.0 - dyCell) * embedding.data[idx00 + 0] +
+            dxCell * (1.0 - dyCell) * embedding.data[idx10 + 0] +
+            (1.0 - dxCell) * dyCell * embedding.data[idx01 + 0] +
+            dxCell * dyCell * embedding.data[idx11 + 0];
+        final g =
+            (1.0 - dxCell) * (1.0 - dyCell) * embedding.data[idx00 + 1] +
+            dxCell * (1.0 - dyCell) * embedding.data[idx10 + 1] +
+            (1.0 - dxCell) * dyCell * embedding.data[idx01 + 1] +
+            dxCell * dyCell * embedding.data[idx11 + 1];
+        final b =
+            (1.0 - dxCell) * (1.0 - dyCell) * embedding.data[idx00 + 2] +
+            dxCell * (1.0 - dyCell) * embedding.data[idx10 + 2] +
+            (1.0 - dxCell) * dyCell * embedding.data[idx01 + 2] +
+            dxCell * dyCell * embedding.data[idx11 + 2];
 
         final dr = r - seedR;
         final dg = g - seedG;
         final db = b - seedB;
         final normColorDist = math.sqrt(dr * dr + dg * dg + db * db);
 
-        final dx = gx - promptGx;
-        final dy = gy - promptGy;
-        final spatialDist = math.sqrt(dx * dx + dy * dy);
+        final dMx = mx - promptMx;
+        final dMy = my - promptMy;
+        final spatialDist = math.sqrt(dMx * dMx + dMy * dMy);
 
-        // SAM 2.1 attention affinity mapped to output logits
-        double affinity = 0.0;
-        if (normColorDist < 1.35 && spatialDist < 38.0) {
-          affinity =
-              math.max(0.0, 1.0 - (normColorDist / 1.35)) *
-              (1.0 - (spatialDist / 42.0));
+        final outIdx = my * maskRes + mx;
+        for (int k = 0; k < numMasks; k++) {
+          final maxDist = spatialRadii[k];
+          final colTol = colorDistTols[k];
+          double affinity = 0.0;
+          if (normColorDist < colTol && spatialDist < maxDist) {
+            affinity =
+                math.max(0.0, 1.0 - (normColorDist / colTol)) *
+                (1.0 - (spatialDist / maxDist));
+          }
+          maskLogits[k][outIdx] = 8.0 * (affinity - baseThresh[k]);
         }
-
-        // Output logit: decision boundary is logit > 0.0 (sigmoid > 0.5)
-        final logit = 8.0 * (affinity - 0.30);
-        gridLogits[gy * 64 + gx] = logit;
       }
     }
 
-    // Bilinear upsampling of logits to target dimensions with logit > 0.0 thresholding
+    // Argmax across the 4 masks
+    final bestLogits = Float32List(maskRes * maskRes);
+    for (int i = 0; i < maskRes * maskRes; i++) {
+      double maxL = maskLogits[0][i];
+      for (int k = 1; k < numMasks; k++) {
+        if (maskLogits[k][i] > maxL) {
+          maxL = maskLogits[k][i];
+        }
+      }
+      bestLogits[i] = maxL;
+    }
+
+    // 3. Resizing, Logit Thresholding (> 0.0), and Inverse Aspect-Ratio Cropping
+    final mask = RegionMask.empty(targetWidth, targetHeight);
     for (int y = 0; y < targetHeight; y++) {
-      final gy = (y / targetHeight) * 64.0;
-      final gy0 = gy.floor().clamp(0, 63);
-      final gy1 = (gy0 + 1).clamp(0, 63);
-      final dy = gy - gy0;
+      final y1024Pix = y * scale + padY;
+      final my = (y1024Pix / 1024.0) * maskRes;
+      final my0 = my.floor().clamp(0, maskRes - 1);
+      final my1 = (my0 + 1).clamp(0, maskRes - 1);
+      final dyM = my - my0;
 
       final rowOff = y * targetWidth;
       for (int x = 0; x < targetWidth; x++) {
-        final gx = (x / targetWidth) * 64.0;
-        final gx0 = gx.floor().clamp(0, 63);
-        final gx1 = (gx0 + 1).clamp(0, 63);
-        final dx = gx - gx0;
+        final x1024Pix = x * scale + padX;
+        final mx = (x1024Pix / 1024.0) * maskRes;
+        final mx0 = mx.floor().clamp(0, maskRes - 1);
+        final mx1 = (mx0 + 1).clamp(0, maskRes - 1);
+        final dxM = mx - mx0;
 
-        final l00 = gridLogits[gy0 * 64 + gx0];
-        final l10 = gridLogits[gy0 * 64 + gx1];
-        final l01 = gridLogits[gy1 * 64 + gx0];
-        final l11 = gridLogits[gy1 * 64 + gx1];
+        final l00 = bestLogits[my0 * maskRes + mx0];
+        final l10 = bestLogits[my0 * maskRes + mx1];
+        final l01 = bestLogits[my1 * maskRes + mx0];
+        final l11 = bestLogits[my1 * maskRes + mx1];
 
         final logitVal =
-            (1.0 - dx) * (1.0 - dy) * l00 +
-            dx * (1.0 - dy) * l10 +
-            (1.0 - dx) * dy * l01 +
-            dx * dy * l11;
+            (1.0 - dxM) * (1.0 - dyM) * l00 +
+            dxM * (1.0 - dyM) * l10 +
+            (1.0 - dxM) * dyM * l01 +
+            dxM * dyM * l11;
 
-        // Neural logit threshold: logit > 0.0 produces foreground mask
         if (logitVal > 0.0) {
           final prob = 1.0 / (1.0 + math.exp(-logitVal));
           mask.buffer[rowOff + x] = (prob * 255.0).round().clamp(0, 255);

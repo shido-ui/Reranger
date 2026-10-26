@@ -9,6 +9,7 @@ import '../../../core/routing/route_names.dart';
 import '../../../core/theme/color_tokens.dart';
 import '../../../core/theme/spacing_tokens.dart';
 import '../../../domain/color/color_palette.dart';
+import '../../../domain/segmentation/cielab_magic_wand_service.dart';
 import '../../../domain/layers/editor_layer.dart';
 import '../../../domain/layers/history_command.dart';
 import '../../editor/presentation/editor_providers.dart';
@@ -212,16 +213,35 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
           final effectiveWeight = maskWeight * state.strength;
 
           if (effectiveWeight > 1e-3) {
+            int recR, recG, recB;
+            if (state.preserveLuminance) {
+              final rec = CielabMagicWandService.recolorLuminancePreserving(
+                rIn: r,
+                gIn: g,
+                bIn: b,
+                targetR: target.r,
+                targetG: target.g,
+                targetB: target.b,
+              );
+              recR = rec[0];
+              recG = rec[1];
+              recB = rec[2];
+            } else {
+              recR = target.r;
+              recG = target.g;
+              recB = target.b;
+            }
+
             final blendedR =
-                (r * (1.0 - effectiveWeight) + target.r * effectiveWeight)
+                (r * (1.0 - effectiveWeight) + recR * effectiveWeight)
                     .round()
                     .clamp(0, 255);
             final blendedG =
-                (g * (1.0 - effectiveWeight) + target.g * effectiveWeight)
+                (g * (1.0 - effectiveWeight) + recG * effectiveWeight)
                     .round()
                     .clamp(0, 255);
             final blendedB =
-                (b * (1.0 - effectiveWeight) + target.b * effectiveWeight)
+                (b * (1.0 - effectiveWeight) + recB * effectiveWeight)
                     .round()
                     .clamp(0, 255);
 
@@ -591,12 +611,38 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
 
                 // Controls Panel
                 Expanded(
-                  flex: 4,
+                  flex: 5,
                   child: Material(
                     color: surfaceElevated,
                     child: ListView(
                       padding: const EdgeInsets.all(AppSpacingTokens.md),
                       children: [
+                        // 0. Prominent Mode Switch: Photo (AI) vs Art (Color)
+                        Center(
+                          child: SegmentedButton<SegmentationMode>(
+                            segments: const [
+                              ButtonSegment<SegmentationMode>(
+                                value: SegmentationMode.photoAi,
+                                label: Text('Photo (AI)'),
+                                icon: Icon(Icons.auto_awesome, size: 18),
+                              ),
+                              ButtonSegment<SegmentationMode>(
+                                value: SegmentationMode.artColor,
+                                label: Text('Art (Color)'),
+                                icon: Icon(Icons.brush, size: 18),
+                              ),
+                            ],
+                            selected: {
+                              ctrl?.state.segmentationMode ??
+                                  SegmentationMode.artColor,
+                            },
+                            onSelectionChanged: (Set<SegmentationMode> sel) {
+                              ctrl?.setSegmentationMode(sel.first);
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacingTokens.md),
+
                         // 1. Source Palette
                         Text(
                           'Select Color to Remap',
@@ -717,57 +763,73 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
 
                         const SizedBox(height: AppSpacingTokens.md),
 
-                        // Level 2 Progressive Disclosure: Tolerance & Feather
-                        ExpansionTile(
-                          title: const Text('Precision & Mask Controls'),
-                          subtitle: Text(
-                            'Tolerance: ${((ctrl?.state.tolerance ?? 0.2) * 100).round()}% | Feather: ${((ctrl?.state.feather ?? 0.1) * 100).round()}%',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: secondaryText,
-                            ),
+                        // 3. Dedicated Precision Sliders: Tolerance & Feather
+                        Text(
+                          'Precision & Mask Controls',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: primaryText,
+                            fontWeight: FontWeight.bold,
                           ),
+                        ),
+                        const SizedBox(height: AppSpacingTokens.xs),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text('Color Tolerance'),
-                                Text(
-                                  '${((ctrl?.state.tolerance ?? 0.2) * 100).round()}%',
-                                ),
-                              ],
+                            Text(
+                              'Color Tolerance',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: primaryText,
+                              ),
                             ),
-                            Slider(
-                              value: ctrl?.state.tolerance ?? 0.20,
-                              min: 0.05,
-                              max: 0.80,
-                              onChanged: (v) => ctrl?.setTolerance(v),
-                            ),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text('Edge Feathering'),
-                                Text(
-                                  '${((ctrl?.state.feather ?? 0.1) * 100).round()}%',
-                                ),
-                              ],
-                            ),
-                            Slider(
-                              value: ctrl?.state.feather ?? 0.10,
-                              min: 0.0,
-                              max: 0.50,
-                              onChanged: (v) => ctrl?.setFeather(v),
-                            ),
-                            SwitchListTile(
-                              title: const Text('Show Mask Preview (Ruby Red)'),
-                              value: ctrl?.state.isMaskPreviewActive ?? false,
-                              onChanged: (_) => ctrl?.toggleMaskPreview(),
-                            ),
-                            SwitchListTile(
-                              title: const Text('Preserve Original Luminance'),
-                              value: ctrl?.state.preserveLuminance ?? true,
-                              onChanged: (_) => ctrl?.togglePreserveLuminance(),
+                            Text(
+                              '${((ctrl?.state.tolerance ?? 0.2) * 100).round()}%',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: secondaryText,
+                              ),
                             ),
                           ],
+                        ),
+                        Slider(
+                          value: ctrl?.state.tolerance ?? 0.20,
+                          min: 0.05,
+                          max: 0.80,
+                          onChanged: (v) => ctrl?.setTolerance(v),
+                        ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Feather',
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                color: primaryText,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              '${((ctrl?.state.feather ?? 0.1) * 100).round()}%',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: secondaryText,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Slider(
+                          value: ctrl?.state.feather ?? 0.10,
+                          min: 0.0,
+                          max: 0.50,
+                          onChanged: (v) => ctrl?.setFeather(v),
+                        ),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Preserve Original Luminance'),
+                          value: ctrl?.state.preserveLuminance ?? true,
+                          onChanged: (_) => ctrl?.togglePreserveLuminance(),
+                        ),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Show Mask Preview (Ruby Red)'),
+                          value: ctrl?.state.isMaskPreviewActive ?? false,
+                          onChanged: (_) => ctrl?.toggleMaskPreview(),
                         ),
                       ],
                     ),

@@ -81,7 +81,7 @@ class CielabMagicWandService {
             (1.0 * p20 + 2.0 * p21 + 1.0 * p22);
 
         final sobelMag = math.sqrt(gx * gx + gy * gy) / 8.0;
-        if (lum[idx] < 0.20 || (sobelMag > 0.12 && lum[idx] < 0.28)) {
+        if (lum[idx] < 0.22 || sobelMag > 0.08) {
           rawEdge[idx] = 1;
         }
       }
@@ -110,7 +110,7 @@ class CielabMagicWandService {
 
     // 2. Convert Seed Pixel to CIELAB with float32 precision
     final seedOff = (seedY * width + seedX) * 4;
-    final seedLab = _rgbToLab(
+    final seedLab = rgbToLab(
       rgbaBytes[seedOff] / 255.0,
       rgbaBytes[seedOff + 1] / 255.0,
       rgbaBytes[seedOff + 2] / 255.0,
@@ -131,8 +131,8 @@ class CielabMagicWandService {
     mask.buffer[seedIdx] = 255;
     queue.add(seedIdx);
 
-    final effColTol = math.max(colorTolerance * 80.0, 25.0);
-    final effHueTol = math.max(hueTolerance * 90.0, 35.0);
+    final effColTol = colorTolerance * 65.0;
+    final effHueTol = hueTolerance * 120.0;
 
     const dx = [1, -1, 0, 0];
     const dy = [0, 0, 1, -1];
@@ -155,7 +155,7 @@ class CielabMagicWandService {
         if (isEdge[nidx] == 1) continue;
 
         final noff = nidx * 4;
-        final nLab = _rgbToLab(
+        final nLab = rgbToLab(
           rgbaBytes[noff] / 255.0,
           rgbaBytes[noff + 1] / 255.0,
           rgbaBytes[noff + 2] / 255.0,
@@ -193,10 +193,11 @@ class CielabMagicWandService {
     return mask;
   }
 
-  static List<double> _rgbToLab(double r, double g, double b) {
-    final rLin = _srgbToLinear(r);
-    final gLin = _srgbToLinear(g);
-    final bLin = _srgbToLinear(b);
+  /// Converts normalized sRGB in [0.0, 1.0] to CIELAB [L*, a*, b*].
+  static List<double> rgbToLab(double r, double g, double b) {
+    final rLin = srgbToLinear(r);
+    final gLin = srgbToLinear(g);
+    final bLin = srgbToLinear(b);
 
     // Clamp intermediate XYZ values to [0.0, 1.0] to prevent color banding
     final x =
@@ -209,9 +210,9 @@ class CielabMagicWandService {
         ((0.0193339 * rLin + 0.1191920 * gLin + 0.9503041 * bLin) / 1.08883)
             .clamp(0.0, 1.0);
 
-    final fx = _labF(x);
-    final fy = _labF(y);
-    final fz = _labF(z);
+    final fx = labF(x);
+    final fy = labF(y);
+    final fz = labF(z);
 
     final labL = 116.0 * fy - 16.0;
     final labA = 500.0 * (fx - fy);
@@ -220,13 +221,67 @@ class CielabMagicWandService {
     return [labL, labA, labB];
   }
 
-  static double _srgbToLinear(double c) {
+  /// Converts CIELAB [L*, a*, b*] back to sRGB bytes [0, 255].
+  static List<int> labToRgb(double l, double a, double b) {
+    final fy = (l + 16.0) / 116.0;
+    final fx = a / 500.0 + fy;
+    final fz = fy - b / 200.0;
+
+    double fInv(double t) {
+      final t3 = t * t * t;
+      return (t3 > 0.008856451679) ? t3 : (t - 16.0 / 116.0) / 7.787037037;
+    }
+
+    final x = (fInv(fx) * 0.95047).clamp(0.0, 1.0);
+    final y = (fInv(fy) * 1.00000).clamp(0.0, 1.0);
+    final z = (fInv(fz) * 1.08883).clamp(0.0, 1.0);
+
+    final rLin = 3.2404542 * x - 1.5371385 * y - 0.4985314 * z;
+    final gLin = -0.9692660 * x + 1.8760108 * y + 0.0415560 * z;
+    final bLin = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z;
+
+    final rByte = (linearToSrgb(rLin) * 255.0).round().clamp(0, 255);
+    final gByte = (linearToSrgb(gLin) * 255.0).round().clamp(0, 255);
+    final bByte = (linearToSrgb(bLin) * 255.0).round().clamp(0, 255);
+
+    return [rByte, gByte, bByte];
+  }
+
+  /// High-fidelity Luminance-Preserving Recolor in CIELAB space.
+  /// Replaces a* and b* with target chromaticity while keeping original L* (100% shadow/highlight preservation).
+  static List<int> recolorLuminancePreserving({
+    required int rIn,
+    required int gIn,
+    required int bIn,
+    required int targetR,
+    required int targetG,
+    required int targetB,
+  }) {
+    final inLab = rgbToLab(rIn / 255.0, gIn / 255.0, bIn / 255.0);
+    final targetLab = rgbToLab(
+      targetR / 255.0,
+      targetG / 255.0,
+      targetB / 255.0,
+    );
+
+    // Retain original L* luminance, substitute target chromaticity (a*, b*)
+    return labToRgb(inLab[0], targetLab[1], targetLab[2]);
+  }
+
+  static double srgbToLinear(double c) {
     return c <= 0.04045
         ? c / 12.92
         : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
   }
 
-  static double _labF(double t) {
+  static double linearToSrgb(double c) {
+    final clamped = c.clamp(0.0, 1.0);
+    return clamped <= 0.0031308
+        ? 12.92 * clamped
+        : 1.055 * math.pow(clamped, 1.0 / 2.4) - 0.055;
+  }
+
+  static double labF(double t) {
     if (t > 0.008856451679) {
       return math.pow(t, 1.0 / 3.0).toDouble();
     } else {

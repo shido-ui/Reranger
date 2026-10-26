@@ -1023,7 +1023,7 @@ void native_cielab_magic_wand(
                        ( 1.0f * p20 + 2.0f * p21 + 1.0f * p22);
 
             float sobel_mag = std::sqrt(gx * gx + gy * gy) / 8.0f;
-            if (lum[idx] < 0.20f || (sobel_mag > 0.12f && lum[idx] < 0.28f)) {
+            if (lum[idx] < 0.22f || sobel_mag > 0.08f) {
                 raw_edge[idx] = 1;
             }
         }
@@ -1083,8 +1083,8 @@ void native_cielab_magic_wand(
     const int dx[4] = {1, -1, 0, 0};
     const int dy[4] = {0, 0, 1, -1};
 
-    float eff_col_tol = std::max(color_tolerance * 80.0f, 25.0f);
-    float eff_hue_tol = std::max(hue_tolerance * 90.0f, 35.0f);
+    float eff_col_tol = color_tolerance * 65.0f;
+    float eff_hue_tol = hue_tolerance * 120.0f;
 
     while (head < qx.size()) {
         int cx = qx[head];
