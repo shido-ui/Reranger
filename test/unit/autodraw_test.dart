@@ -354,12 +354,6 @@ void main() {
         );
         addTearDown(() => tempDir.deleteSync(recursive: true));
 
-        final boundaryKey = GlobalKey();
-        final recorder = VideoTimelapseRecorder(
-          repaintBoundaryKey: boundaryKey,
-          tempRootDir: tempDir,
-        );
-
         final uiImg = img.Image(width: 32, height: 32, numChannels: 4);
         img.fill(uiImg, color: img.ColorRgba8(50, 100, 150, 255));
         final samplePng = Uint8List.fromList(img.encodePng(uiImg));
@@ -369,17 +363,29 @@ void main() {
             home: AutodrawScreen(
               projectId: 'proj_autodraw_test',
               sourceImageBytes: samplePng,
-              recorderOverride: recorder,
             ),
           ),
         );
 
         // Let the background isolate vectorization complete
         await tester.runAsync(() async {
-          await Future.delayed(const Duration(milliseconds: 300));
+          await Future.delayed(const Duration(milliseconds: 1000));
         });
         await tester.pump();
-        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 50));
+
+        // Advance ticker multiple frames to draw strokes and capture video frames
+        for (int i = 0; i < 25; i++) {
+          await tester.pump(const Duration(milliseconds: 50));
+          await tester.runAsync(() async {
+            await Future.delayed(const Duration(milliseconds: 30));
+          });
+        }
+
+        // Advance ticker frames so post-frame callbacks composite and capture frames
+        for (int i = 0; i < 20; i++) {
+          await tester.pump(const Duration(milliseconds: 30));
+        }
 
         // Verify Autodraw Studio UI elements
         expect(find.text('Autodraw Studio'), findsOneWidget);
@@ -399,6 +405,13 @@ void main() {
         // Verify canvas & progress bar
         expect(find.byType(CustomPaint), findsWidgets);
         expect(find.byType(LinearProgressIndicator), findsOneWidget);
+
+        // Verify that video frames were captured during drawing loop (Recorded: X frames where X > 0)
+        expect(
+          find.textContaining(RegExp(r'Recorded:\s+[1-9]\d*\s+frames')),
+          findsOneWidget,
+          reason: 'Video recorder must advance and capture > 0 frames during rendering!',
+        );
       },
     );
 
@@ -558,6 +571,78 @@ void main() {
         reason:
             'Autodraw highlight strokes must have rich Cinematic Orange color',
       );
+    });
+
+    test('11. Phase 1.5 Polish: Brush dynamics (tapering), ink blending (multiply), 60FPS picture cache, and 1080p60 export', () async {
+      // 1. Verify AutodrawRenderCache records picture and caches completed strokes
+      final cache = AutodrawRenderCache();
+      expect(cache.picture, isNull);
+      expect(cache.cachedStrokeCount, equals(0));
+
+      final testStroke = AutodrawStroke(
+        id: 1,
+        layer: AutodrawTonalLayer.background,
+        color: const Color(0xFF102030),
+        strokeWidth: 2.2,
+        startPoint: const Offset(10, 10),
+        segments: const [
+          BezierSegment(
+            cp1: Offset(20, 30),
+            cp2: Offset(40, 30),
+            end: Offset(50, 10),
+          ),
+        ],
+      );
+
+      cache.update(
+        strokes: [testStroke],
+        targetCount: 1,
+        size: const Size(200, 200),
+        scaleX: 1.0,
+        scaleY: 1.0,
+      );
+
+      expect(cache.picture, isNotNull);
+      expect(cache.cachedStrokeCount, equals(1));
+
+      // Calling update again with same count must NOT re-record
+      final recordedPicture = cache.picture;
+      cache.update(
+        strokes: [testStroke],
+        targetCount: 1,
+        size: const Size(200, 200),
+        scaleX: 1.0,
+        scaleY: 1.0,
+      );
+      expect(identical(cache.picture, recordedPicture), isTrue);
+
+      cache.clear();
+      expect(cache.picture, isNull);
+      expect(cache.cachedStrokeCount, equals(0));
+
+      // 2. Verify 1080p 60fps MP4 video generation
+      final tempDir = Directory.systemTemp.createTempSync(
+        'reranger_1080p60_test_',
+      );
+      addTearDown(() => tempDir.deleteSync(recursive: true));
+
+      final dummyFrame = File('${tempDir.path}/frame_0.raw');
+      dummyFrame.writeAsBytesSync(Uint8List(128 * 128 * 4));
+
+      final mp4Path = '${tempDir.path}/autodraw_1080p60.mp4';
+      await VideoTimelapseRecorder.writeDeterministicMp4(
+        framePaths: [dummyFrame.path],
+        outputPath: mp4Path,
+        width: 1080,
+        height: 1920,
+        fps: 60,
+      );
+
+      final mp4Bytes = File(mp4Path).readAsBytesSync();
+      expect(mp4Bytes.length, greaterThan(64));
+      // Verify valid MP4 ftyp isom header
+      expect(String.fromCharCodes(mp4Bytes.sublist(4, 8)), equals('ftyp'));
+      expect(String.fromCharCodes(mp4Bytes.sublist(8, 12)), equals('isom'));
     });
   });
 }

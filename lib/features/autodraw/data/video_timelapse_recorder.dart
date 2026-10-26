@@ -47,8 +47,8 @@ class VideoTimelapseRecorder {
     _sessionDir = Directory(
       '${tempRootDir.path}/autodraw_rec_${DateTime.now().millisecondsSinceEpoch}',
     );
-    if (!await _sessionDir!.exists()) {
-      await _sessionDir!.create(recursive: true);
+    if (!_sessionDir!.existsSync()) {
+      _sessionDir!.createSync(recursive: true);
     }
     _framePaths.clear();
     _recordedFrames = 0;
@@ -57,62 +57,87 @@ class VideoTimelapseRecorder {
     _isCapturing = false;
   }
 
-  /// Frame capture tick called from Flutter Ticker / AnimationController loop.
-  /// Captures every [captureCadence] frames, streams raw bytes to disk immediately,
-  /// and disposes [ui.Image] instantly with zero memory accumulation.
-  Future<void> captureTick(int frameIndex) async {
-    if (!_isRecording || _isCapturing) return;
-    if (frameIndex % captureCadence != 0) return;
-
-    // Strict 150MB headroom check: Drop frames if storage budget exceeded
-    if (_totalBytesWritten >= maxBufferBytes) return;
+  /// Captures current frame from the repaint boundary after compositing.
+  /// Streams raw bytes to disk immediately and disposes [ui.Image] instantly with zero memory accumulation.
+  Future<bool> captureFrame() async {
+    if (!_isRecording || _isCapturing) return false;
+    if (_sessionDir == null) return false;
+    if (_totalBytesWritten >= maxBufferBytes) return false;
 
     _isCapturing = true;
     try {
-      final boundary =
-          repaintBoundaryKey.currentContext?.findRenderObject()
-              as RenderRepaintBoundary?;
-      if (boundary == null || !boundary.attached) return;
+      final context = repaintBoundaryKey.currentContext;
+      if (context == null) {
+        debugPrint(
+          '[VideoTimelapseRecorder] context is null for key $repaintBoundaryKey',
+        );
+        return false;
+      }
+
+      final boundary = context.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null || !boundary.attached) {
+        debugPrint('[VideoTimelapseRecorder] boundary is null or not attached');
+        return false;
+      }
 
       final ui.Image image = await boundary.toImage(pixelRatio: 1.0);
       try {
         final byteData = await image.toByteData(
           format: ui.ImageByteFormat.rawRgba,
         );
-        if (byteData == null) return;
+        if (byteData == null) {
+          debugPrint('[VideoTimelapseRecorder] byteData is null');
+          return false;
+        }
 
         final rawBytes = byteData.buffer.asUint8List();
         if (_totalBytesWritten + rawBytes.length > maxBufferBytes) {
-          return; // Exceeds 150MB budget
+          debugPrint(
+            '[VideoTimelapseRecorder] totalBytesWritten exceeds maxBufferBytes',
+          );
+          return false; // Exceeds 150MB budget
         }
 
         final frameIndexStr = _recordedFrames.toString().padLeft(5, '0');
         final framePath = '${_sessionDir!.path}/frame_$frameIndexStr.raw';
 
         final file = File(framePath);
-        await file.writeAsBytes(rawBytes, flush: true);
+        file.writeAsBytesSync(rawBytes, flush: false);
 
         _framePaths.add(framePath);
         _totalBytesWritten += rawBytes.length;
         _recordedFrames++;
+        debugPrint(
+          '[VideoTimelapseRecorder] Frame captured: $_recordedFrames (${rawBytes.length} bytes)',
+        );
+        return true;
       } finally {
         // Invariant: IMMEDIATELY dispose ui.Image to avoid RAM exhaustion / OOM
         image.dispose();
       }
-    } catch (_) {
-      // Ignore transient render boundary exceptions during tearing down
+    } catch (e) {
+      debugPrint('[VideoTimelapseRecorder] Capture exception: $e');
+      return false;
     } finally {
       _isCapturing = false;
     }
   }
 
+  /// Frame capture tick called from Flutter Ticker / AnimationController loop.
+  /// Captures every [captureCadence] frames, streams raw bytes to disk immediately,
+  /// and disposes [ui.Image] instantly with zero memory accumulation.
+  Future<bool> captureTick(int frameIndex) async {
+    if (frameIndex % captureCadence != 0) return false;
+    return await captureFrame();
+  }
+
   /// Stitches recorded frames into an H.264 MP4 video, cleans up temp files,
-  /// and returns the output video path.
+  /// and returns the output video path. Defaults to 1080p 60fps with 8Mbps bitrate.
   Future<String> stopAndEncode({
     required int width,
     required int height,
-    int fps = 30,
-    int bitRate = 3000000,
+    int fps = 60,
+    int bitRate = 8000000,
   }) async {
     _isRecording = false;
 

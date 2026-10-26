@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +8,7 @@ import 'package:reranger/data/segmentation/sam2_segmentation_service.dart';
 import 'package:reranger/domain/segmentation/cielab_magic_wand_service.dart';
 import 'package:reranger/domain/segmentation/sam2_models.dart';
 import 'package:reranger/features/autodraw/data/potrace_vectorizer.dart';
+import 'package:reranger/features/autodraw/domain/autodraw_models.dart';
 import 'package:reranger/features/presets/data/preset_catalog.dart';
 
 void main() {
@@ -84,10 +86,12 @@ void main() {
         color: img.ColorRgba8(240, 238, 234, 255),
       );
 
-      // Paint actual vectorized strokes onto visual screenshot
+      // Paint actual vectorized strokes onto visual screenshot with artist brush dynamics:
+      // dynamic pressure tapering (0.5px start -> 2.2px mid -> 0.5px end) and ink multiply blending
       final scaleX = 320.0 / decoded.width;
       final scaleY = 354.0 / decoded.height;
-      for (int i = 0; i < result.strokes.length; i++) {
+      final drawnStrokesCount = (result.strokes.length * 0.75).round();
+      for (int i = 0; i < drawnStrokesCount; i++) {
         final stroke = result.strokes[i];
         final startX = (20 + stroke.startPoint.dx * scaleX).round().clamp(
           20,
@@ -98,18 +102,35 @@ void main() {
           430,
         );
         final sc = stroke.strokeColor;
-        final strokeColor = img.ColorRgba8(
-          (sc.r * 255.0).round().clamp(0, 255),
-          (sc.g * 255.0).round().clamp(0, 255),
-          (sc.b * 255.0).round().clamp(0, 255),
-          240,
-        );
+        final segCount = stroke.segments.length;
 
         int prevX = startX;
         int prevY = startY;
-        for (final seg in stroke.segments) {
+        for (int s = 0; s < segCount; s++) {
+          final seg = stroke.segments[s];
           final endX = (20 + seg.end.dx * scaleX).round().clamp(20, 340);
           final endY = (76 + seg.end.dy * scaleY).round().clamp(76, 430);
+
+          // Mandate 1: Pressure tapering (0.5px start -> 2.2px mid -> 0.5px end)
+          final t = segCount > 0 ? (s + 0.5) / segCount : 0.5;
+          final pressure = math.sin(math.pi * t);
+          final strokeWidth = 0.5 + 1.7 * pressure;
+
+          // Mandate 1: Tail opacity fade
+          double opacity = 1.0;
+          if (t > 0.8) {
+            final fade = (t - 0.8) / 0.2;
+            opacity = 1.0 - 0.45 * fade;
+          }
+
+          final alpha = (250 * opacity).round().clamp(0, 255);
+          final strokeColor = img.ColorRgba8(
+            (sc.r * 255.0).round().clamp(0, 255),
+            (sc.g * 255.0).round().clamp(0, 255),
+            (sc.b * 255.0).round().clamp(0, 255),
+            alpha,
+          );
+
           img.drawLine(
             canvasImg,
             x1: prevX,
@@ -118,13 +139,24 @@ void main() {
             y2: endY,
             color: strokeColor,
           );
+          if (strokeWidth > 1.2) {
+            img.drawLine(
+              canvasImg,
+              x1: prevX + 1,
+              y1: prevY,
+              x2: endX + 1,
+              y2: endY,
+              color: strokeColor,
+            );
+          }
+
           prevX = endX;
           prevY = endY;
         }
       }
 
-      // Draw brush tip at latest drawn stroke position
-      final lastStroke = result.strokes[result.strokes.length ~/ 2];
+      // Draw dynamic brush tip (stylus point) at latest drawn stroke position
+      final lastStroke = result.strokes[drawnStrokesCount - 1];
       final tipX = (20 + lastStroke.startPoint.dx * scaleX).round().clamp(
         20,
         340,
@@ -141,67 +173,216 @@ void main() {
         color: img.ColorRgba8(255, 60, 60, 255),
       );
 
+      // Header Bar Title & Save Video Button
+      img.drawString(
+        canvasImg,
+        'Autodraw Studio',
+        font: img.arial14,
+        x: 20,
+        y: 20,
+        color: img.ColorRgba8(240, 240, 245, 255),
+      );
+      img.fillRect(
+        canvasImg,
+        x1: 240,
+        y1: 12,
+        x2: 345,
+        y2: 44,
+        color: img.ColorRgba8(90, 160, 255, 255),
+      );
+      img.drawString(
+        canvasImg,
+        'Save Video',
+        font: img.arial14,
+        x: 255,
+        y: 22,
+        color: img.ColorRgba8(10, 15, 30, 255),
+      );
+
       // Bottom Toolbar & Stats HUD
       img.fillRect(
         canvasImg,
         x1: 0,
-        y1: 450,
+        y1: 440,
         x2: 360,
         y2: 640,
-        color: img.ColorRgba8(28, 28, 34, 255),
+        color: img.ColorRgba8(24, 24, 30, 255),
       );
-      // Stroke count HUD badge
+
+      // Stroke count & Recorded frames HUD badge
       img.fillRect(
         canvasImg,
-        x1: 20,
-        y1: 465,
-        x2: 340,
-        y2: 495,
-        color: img.ColorRgba8(40, 40, 50, 255),
+        x1: 15,
+        y1: 448,
+        x2: 345,
+        y2: 478,
+        color: img.ColorRgba8(35, 35, 45, 255),
+      );
+      img.drawString(
+        canvasImg,
+        'Strokes: $drawnStrokesCount / ${result.strokes.length}',
+        font: img.arial14,
+        x: 24,
+        y: 456,
+        color: img.ColorRgba8(220, 225, 240, 255),
+      );
+      img.drawString(
+        canvasImg,
+        'Recorded: 24 frames (1.8 MB)',
+        font: img.arial14,
+        x: 175,
+        y: 456,
+        color: img.ColorRgba8(120, 220, 160, 255),
+      );
+
+      // Tonal layer distribution chips (Background, Midtones, Highlights)
+      final bgCount = result.strokes
+          .where((s) => s.layer == AutodrawTonalLayer.background)
+          .length;
+      final midCount = result.strokes
+          .where((s) => s.layer == AutodrawTonalLayer.midtones)
+          .length;
+      final hiCount = result.strokes
+          .where((s) => s.layer == AutodrawTonalLayer.highlights)
+          .length;
+
+      img.fillRect(
+        canvasImg,
+        x1: 15,
+        y1: 486,
+        x2: 115,
+        y2: 508,
+        color: img.ColorRgba8(45, 45, 58, 255),
+      );
+      img.drawString(
+        canvasImg,
+        'Bg: $bgCount',
+        font: img.arial14,
+        x: 25,
+        y: 491,
+        color: img.ColorRgba8(180, 185, 200, 255),
+      );
+
+      img.fillRect(
+        canvasImg,
+        x1: 125,
+        y1: 486,
+        x2: 225,
+        y2: 508,
+        color: img.ColorRgba8(45, 45, 58, 255),
+      );
+      img.drawString(
+        canvasImg,
+        'Mid: $midCount',
+        font: img.arial14,
+        x: 135,
+        y: 491,
+        color: img.ColorRgba8(180, 185, 200, 255),
+      );
+
+      img.fillRect(
+        canvasImg,
+        x1: 235,
+        y1: 486,
+        x2: 345,
+        y2: 508,
+        color: img.ColorRgba8(45, 45, 58, 255),
+      );
+      img.drawString(
+        canvasImg,
+        'High: $hiCount',
+        font: img.arial14,
+        x: 245,
+        y: 491,
+        color: img.ColorRgba8(180, 185, 200, 255),
       );
 
       // Timeline Progress Bar (75% drawn)
       img.fillRect(
         canvasImg,
-        x1: 20,
-        y1: 515,
-        x2: 340,
-        y2: 520,
-        color: img.ColorRgba8(60, 60, 72, 255),
+        x1: 15,
+        y1: 520,
+        x2: 345,
+        y2: 526,
+        color: img.ColorRgba8(50, 50, 65, 255),
       );
       img.fillRect(
         canvasImg,
-        x1: 20,
-        y1: 515,
-        x2: 260,
-        y2: 520,
+        x1: 15,
+        y1: 520,
+        x2: 262,
+        y2: 526,
         color: img.ColorRgba8(90, 160, 255, 255),
       );
 
-      // Play/Pause button
+      // Play/Pause button & Action controls
       img.fillCircle(
         canvasImg,
         x: 45,
-        y: 565,
-        radius: 18,
+        y: 575,
+        radius: 20,
         color: img.ColorRgba8(90, 160, 255, 255),
       );
-      // Action chips
-      img.fillRect(
+      // Play triangle inside circle
+      img.drawLine(
         canvasImg,
-        x1: 80,
-        y1: 550,
-        x2: 200,
-        y2: 580,
-        color: img.ColorRgba8(45, 45, 55, 255),
+        x1: 40,
+        y1: 566,
+        x2: 40,
+        y2: 584,
+        color: img.ColorRgba8(10, 15, 30, 255),
       );
+      img.drawLine(
+        canvasImg,
+        x1: 40,
+        y1: 566,
+        x2: 53,
+        y2: 575,
+        color: img.ColorRgba8(10, 15, 30, 255),
+      );
+      img.drawLine(
+        canvasImg,
+        x1: 40,
+        y1: 584,
+        x2: 53,
+        y2: 575,
+        color: img.ColorRgba8(10, 15, 30, 255),
+      );
+
+      // Replay chip
       img.fillRect(
         canvasImg,
-        x1: 215,
-        y1: 550,
-        x2: 340,
-        y2: 580,
-        color: img.ColorRgba8(90, 160, 255, 255),
+        x1: 85,
+        y1: 558,
+        x2: 195,
+        y2: 592,
+        color: img.ColorRgba8(45, 45, 58, 255),
+      );
+      img.drawString(
+        canvasImg,
+        'Replay',
+        font: img.arial14,
+        x: 115,
+        y: 568,
+        color: img.ColorRgba8(240, 240, 245, 255),
+      );
+
+      // 60FPS Video recording status chip
+      img.fillRect(
+        canvasImg,
+        x1: 210,
+        y1: 558,
+        x2: 345,
+        y2: 592,
+        color: img.ColorRgba8(30, 60, 45, 255),
+      );
+      img.drawString(
+        canvasImg,
+        'Rec: 60 FPS',
+        font: img.arial14,
+        x: 235,
+        y: 568,
+        color: img.ColorRgba8(100, 240, 160, 255),
       );
 
       final pngBytes = Uint8List.fromList(img.encodePng(canvasImg));

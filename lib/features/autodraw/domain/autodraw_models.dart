@@ -75,6 +75,8 @@ class AutodrawStroke {
   final List<BezierSegment> segments;
 
   Path? _cachedPath;
+  double? _cachedScaleX;
+  double? _cachedScaleY;
   double? _cachedLength;
 
   AutodrawStroke({
@@ -87,23 +89,32 @@ class AutodrawStroke {
     required this.segments,
   }) : strokeColor = strokeColor ?? color ?? const Color(0xFF000000);
 
-  /// Constructs a Flutter [Path] representing this stroke.
-  Path get path {
-    if (_cachedPath != null) return _cachedPath!;
-    final p = Path()..moveTo(startPoint.dx, startPoint.dy);
+  /// Constructs a Flutter [Path] representing this stroke, scaling every x and y coordinate by [scaleX] and [scaleY].
+  Path toScaledPath(double scaleX, double scaleY) {
+    if (_cachedPath != null &&
+        _cachedScaleX == scaleX &&
+        _cachedScaleY == scaleY) {
+      return _cachedPath!;
+    }
+    final p = Path()..moveTo(startPoint.dx * scaleX, startPoint.dy * scaleY);
     for (final seg in segments) {
       p.cubicTo(
-        seg.cp1.dx,
-        seg.cp1.dy,
-        seg.cp2.dx,
-        seg.cp2.dy,
-        seg.end.dx,
-        seg.end.dy,
+        seg.cp1.dx * scaleX,
+        seg.cp1.dy * scaleY,
+        seg.cp2.dx * scaleX,
+        seg.cp2.dy * scaleY,
+        seg.end.dx * scaleX,
+        seg.end.dy * scaleY,
       );
     }
     _cachedPath = p;
+    _cachedScaleX = scaleX;
+    _cachedScaleY = scaleY;
     return p;
   }
+
+  /// Constructs an unscaled Flutter [Path] representing this stroke in native bitmap coordinates.
+  Path get path => toScaledPath(1.0, 1.0);
 
   /// Estimated total arc length of the stroke.
   double get totalLength {

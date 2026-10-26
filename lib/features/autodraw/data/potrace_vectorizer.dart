@@ -225,12 +225,13 @@ class PotraceVectorizer {
                     runStart + (x - runStart) * 0.66,
                     y + (y % 4 == 0 ? -1.0 : 1.0),
                   );
-                  final startOff = (y * width + runStart) * 4;
+                  final midX = (runStart + x) ~/ 2;
+                  final sampleOff = (y * width + midX) * 4;
                   final strokeColor = Color.fromARGB(
                     255,
-                    rgba[startOff],
-                    rgba[startOff + 1],
-                    rgba[startOff + 2],
+                    rgba[sampleOff],
+                    rgba[sampleOff + 1],
+                    rgba[sampleOff + 2],
                   );
                   outList.add(
                     AutodrawStroke(

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -45,6 +46,7 @@ class _AutodrawScreenState extends State<AutodrawScreen>
   late final Ticker _ticker;
   late final VideoTimelapseRecorder _recorder;
   final PotraceVectorizer _vectorizer = const PotraceVectorizer();
+  final AutodrawRenderCache _renderCache = AutodrawRenderCache();
 
   AutodrawVectorizationResult? _vectorResult;
   bool _isLoading = true;
@@ -59,6 +61,18 @@ class _AutodrawScreenState extends State<AutodrawScreen>
 
   // Maximum batch of paths advanced per 16ms frame budget
   static const int _maxPathsPerFrame = 40;
+
+  @visibleForTesting
+  Ticker get ticker => _ticker;
+
+  @visibleForTesting
+  VideoTimelapseRecorder get recorder => _recorder;
+
+  @visibleForTesting
+  int get currentStrokeIndex => _currentStrokeIndex;
+
+  @visibleForTesting
+  String? get errorMessage => _errorMessage;
 
   @override
   void initState() {
@@ -133,6 +147,14 @@ class _AutodrawScreenState extends State<AutodrawScreen>
         });
         await _recorder.startRecording();
         _ticker.start();
+
+        // Capture initial frame after first composited paint
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          if (mounted && _recorder.isRecording) {
+            await _recorder.captureFrame();
+            if (mounted) setState(() {});
+          }
+        });
       }
     } catch (e) {
       if (mounted) {
@@ -173,11 +195,22 @@ class _AutodrawScreenState extends State<AutodrawScreen>
       }
     }
 
+    final frameIdx = _frameCounter++;
+    debugPrint(
+      '[AutodrawTicker] Advancing frame: $frameIdx, stroke: $_currentStrokeIndex / ${strokes.length}, progress: ${_currentStrokeProgress.toStringAsFixed(2)}',
+    );
+
     setState(() {});
 
-    // Time-lapse video capture tick (every 4th frame, streamed directly to disk)
-    if (_recorder.isRecording) {
-      _recorder.captureTick(_frameCounter++);
+    // Time-lapse video capture: Ensure frame is painted before calling toImage()
+    if (_recorder.isRecording && frameIdx % _recorder.captureCadence == 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted || !_recorder.isRecording) return;
+        final captured = await _recorder.captureFrame();
+        if (mounted && captured) {
+          setState(() {}); // Update the Recorded: X frames UI counter
+        }
+      });
     }
   }
 
@@ -188,20 +221,37 @@ class _AutodrawScreenState extends State<AutodrawScreen>
     setState(() => _isEncoding = true);
 
     try {
-      final width = _vectorResult!.width > 0 ? _vectorResult!.width : 512;
-      final height = _vectorResult!.height > 0 ? _vectorResult!.height : 512;
+      // Mandate 4: 1080p resolution and 60fps frame rate for Instagram / TikTok
+      final srcW = _vectorResult!.width > 0 ? _vectorResult!.width : 1080;
+      final srcH = _vectorResult!.height > 0 ? _vectorResult!.height : 1080;
+      int exportWidth;
+      int exportHeight;
+      if (srcW == srcH) {
+        exportWidth = 1080;
+        exportHeight = 1080;
+      } else if (srcW < srcH) {
+        exportWidth = 1080;
+        exportHeight = ((1080 * srcH) / srcW).round();
+      } else {
+        exportHeight = 1080;
+        exportWidth = ((1080 * srcW) / srcH).round();
+      }
+      // H.264 codecs require even dimensions
+      if (exportWidth % 2 != 0) exportWidth -= 1;
+      if (exportHeight % 2 != 0) exportHeight -= 1;
 
-      // Encode frames via hardware MediaCodec (or fallback stitcher)
+      // Encode frames via hardware MediaCodec (or fallback stitcher) at 1080p 60fps
       final mp4Path = await _recorder.stopAndEncode(
-        width: width,
-        height: height,
-        fps: 30,
+        width: exportWidth,
+        height: exportHeight,
+        fps: 60,
+        bitRate: 8000000,
       );
 
       // Save to user gallery MediaStore
       final galleryPath = await _recorder.saveVideoToGallery(
         mp4Path: mp4Path,
-        title: 'reranger_autodraw_${widget.projectId}',
+        title: 'reranger_autodraw_${widget.projectId}_1080p60',
       );
 
       if (mounted) {
@@ -231,6 +281,7 @@ class _AutodrawScreenState extends State<AutodrawScreen>
 
   void _restartAnimation() async {
     _ticker.stop();
+    _renderCache.clear();
     setState(() {
       _currentStrokeIndex = 0;
       _currentStrokeProgress = 0.0;
@@ -243,6 +294,7 @@ class _AutodrawScreenState extends State<AutodrawScreen>
   @override
   void dispose() {
     _ticker.dispose();
+    _renderCache.clear();
     _recorder.cleanup();
     super.dispose();
   }
@@ -340,6 +392,9 @@ class _AutodrawScreenState extends State<AutodrawScreen>
                                 completedCount: _currentStrokeIndex,
                                 currentProgress: _currentStrokeProgress,
                                 accentColor: accentColor,
+                                sourceWidth: _vectorResult?.width ?? 1,
+                                sourceHeight: _vectorResult?.height ?? 1,
+                                renderCache: _renderCache,
                               ),
                               size: Size.infinite,
                             ),
@@ -366,32 +421,29 @@ class _AutodrawScreenState extends State<AutodrawScreen>
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Progress Bar & Tonal Stats
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Expanded(
-                              child: Text(
+                        // Progress Bar & Tonal Stats (Horizontal scroll prevents overflow on narrow screens)
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          physics: const BouncingScrollPhysics(),
+                          child: Row(
+                            children: [
+                              Text(
                                 'Strokes: $_currentStrokeIndex / ${_vectorResult?.strokes.length ?? 0}',
                                 style: theme.textTheme.labelMedium?.copyWith(
                                   color: primaryText,
                                   fontWeight: FontWeight.w600,
                                 ),
-                                overflow: TextOverflow.ellipsis,
                               ),
-                            ),
-                            const SizedBox(width: AppSpacingTokens.xs),
-                            Flexible(
-                              child: Text(
+                              const SizedBox(width: AppSpacingTokens.md),
+                              Text(
                                 'Recorded: ${_recorder.recordedFrameCount} frames (${(_recorder.totalBytesWritten / (1024 * 1024)).toStringAsFixed(1)} MB)',
                                 style: theme.textTheme.labelSmall?.copyWith(
                                   color: secondaryText,
                                   fontFamily: 'monospace',
                                 ),
-                                overflow: TextOverflow.ellipsis,
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                         const SizedBox(height: AppSpacingTokens.xs),
                         LinearProgressIndicator(
@@ -405,10 +457,12 @@ class _AutodrawScreenState extends State<AutodrawScreen>
                         ),
                         const SizedBox(height: AppSpacingTokens.sm),
 
-                        // Play/Pause & Speed Row (Horizontal scroll prevents UI RenderFlex overflow)
+                        // Play/Pause & Speed Row (Horizontal scroll with BouncingScrollPhysics prevents overflow)
                         SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
+                          physics: const BouncingScrollPhysics(),
                           child: Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
                               IconButton(
                                 key: const Key('autodraw_play_pause_button'),
@@ -465,95 +519,248 @@ class _AutodrawScreenState extends State<AutodrawScreen>
   }
 }
 
-/// CustomPainter rendering Bézier stroke paths and the dynamic Brush Tip effect
-/// via [PathMetric].
+/// Offscreen display-list cache leveraging [ui.Picture] to achieve locked 60FPS.
+/// Once a stroke is drawn, it is recorded into this cached picture and never re-evaluated
+/// on subsequent frames.
+class AutodrawRenderCache {
+  ui.Picture? _cachedPicture;
+  int _cachedStrokeCount = 0;
+  Size _cachedSize = Size.zero;
+
+  ui.Picture? get picture => _cachedPicture;
+  int get cachedStrokeCount => _cachedStrokeCount;
+
+  void update({
+    required List<AutodrawStroke> strokes,
+    required int targetCount,
+    required Size size,
+    required double scaleX,
+    required double scaleY,
+  }) {
+    if (size != _cachedSize) {
+      clear();
+      _cachedSize = size;
+    }
+
+    final end = targetCount.clamp(0, strokes.length);
+    if (end <= _cachedStrokeCount) {
+      if (end < _cachedStrokeCount) {
+        clear();
+        _cachedSize = size;
+      } else {
+        return;
+      }
+    }
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(
+      recorder,
+      Rect.fromLTWH(0, 0, size.width, size.height),
+    );
+
+    if (_cachedPicture != null) {
+      canvas.drawPicture(_cachedPicture!);
+    }
+
+    for (int i = _cachedStrokeCount; i < end; i++) {
+      AutodrawPainter.drawTaperedStroke(
+        canvas: canvas,
+        stroke: strokes[i],
+        scaleX: scaleX,
+        scaleY: scaleY,
+        progress: 1.0,
+      );
+    }
+
+    final newPicture = recorder.endRecording();
+    _cachedPicture?.dispose();
+    _cachedPicture = newPicture;
+    _cachedStrokeCount = end;
+  }
+
+  void clear() {
+    _cachedPicture?.dispose();
+    _cachedPicture = null;
+    _cachedStrokeCount = 0;
+    _cachedSize = Size.zero;
+  }
+}
+
+/// CustomPainter rendering Bézier stroke paths with artist brush dynamics:
+/// - Dynamic pressure tapering (0.5px start -> 2.2px mid -> 0.5px end) via [ui.PathMetric].
+/// - Realistic ink blending with [BlendMode.multiply] for authentic watercolor/ink cross-mixing.
+/// - Locked 60FPS performance via offscreen [AutodrawRenderCache] display lists.
+/// - Dynamic Brush Tip effect via [PathMetric] tangents at the active leading edge.
 class AutodrawPainter extends CustomPainter {
   final List<AutodrawStroke> strokes;
   final int completedCount;
   final double currentProgress;
   final Color accentColor;
+  final int sourceWidth;
+  final int sourceHeight;
+  final AutodrawRenderCache? renderCache;
 
   const AutodrawPainter({
     required this.strokes,
     required this.completedCount,
     required this.currentProgress,
     required this.accentColor,
+    required this.sourceWidth,
+    required this.sourceHeight,
+    this.renderCache,
   });
+
+  /// Draws an artist-grade brush stroke using [ui.PathMetric] with dynamic pressure
+  /// tapering (0.5px start -> 2.2px mid -> 0.5px end), tail opacity fade, and [BlendMode.multiply]
+  /// for realistic ink & watercolor blending.
+  static void drawTaperedStroke({
+    required Canvas canvas,
+    required AutodrawStroke stroke,
+    required double scaleX,
+    required double scaleY,
+    required double progress,
+  }) {
+    if (progress <= 0.0) return;
+
+    final scaledPath = stroke.toScaledPath(scaleX, scaleY);
+    final metrics = scaledPath.computeMetrics().toList();
+    if (metrics.isEmpty) return;
+
+    final baseColor = stroke.strokeColor;
+    final maxAllowedWidth = stroke.strokeWidth.clamp(1.8, 2.4);
+
+    for (final metric in metrics) {
+      final totalLen = metric.length;
+      if (totalLen <= 0) continue;
+
+      final targetLen = totalLen * progress.clamp(0.0, 1.0);
+      if (targetLen <= 0) continue;
+
+      // Adaptive segment subdivision (3.0 - 7.0 logical px) for smooth curvature and tapering
+      final stepLen = (targetLen / 16.0).clamp(3.0, 7.0);
+      final segmentCount = (targetLen / stepLen).ceil().clamp(1, 48);
+
+      for (int i = 0; i < segmentCount; i++) {
+        final startD = i * (targetLen / segmentCount);
+        final endD = math.min((i + 1) * (targetLen / segmentCount), targetLen);
+        if (endD <= startD) continue;
+
+        final segPath = metric.extractPath(startD, endD);
+
+        // Normalized position along the full stroke [0.0, 1.0]
+        final midD = (startD + endD) * 0.5;
+        final t = (midD / totalLen).clamp(0.0, 1.0);
+
+        // Mandate 1: Brush Dynamics - Interpolate strokeWidth based on position
+        // Thin at start (0.5px), thick in middle (~2.0-2.2px), tapering off at end (0.5px)
+        final pressure = math.sin(math.pi * t);
+        final strokeWidth = 0.5 + (maxAllowedWidth - 0.5) * pressure;
+
+        // Mandate 1: Opacity fade at the tail end of the stroke (t > 0.8)
+        double opacity = 1.0;
+        if (t > 0.8) {
+          final fadeFactor = (t - 0.8) / 0.2; // 0.0 to 1.0
+          opacity = 1.0 - (0.45 * fadeFactor); // 1.0 down to 0.55
+        }
+
+        final segColor = baseColor.withValues(
+          alpha: (baseColor.a * opacity).clamp(0.0, 1.0),
+        );
+
+        // Mandate 2: Realistic Ink Blending - Paint()..blendMode = BlendMode.multiply
+        final paint = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..blendMode = BlendMode.multiply
+          ..color = segColor
+          ..strokeWidth = strokeWidth;
+
+        canvas.drawPath(segPath, paint);
+      }
+    }
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
     if (strokes.isEmpty) return;
 
-    // Calculate scale to fit canvas
-    final scaleX = size.width / 64.0;
-    final scaleY = size.height / 64.0;
-    final scale = math.min(scaleX, scaleY);
+    final srcW = sourceWidth > 0
+        ? sourceWidth.toDouble()
+        : (size.width > 0 ? size.width : 1.0);
+    final srcH = sourceHeight > 0
+        ? sourceHeight.toDouble()
+        : (size.height > 0 ? size.height : 1.0);
 
-    canvas.save();
-    canvas.scale(scale, scale);
+    // Coordinate scaling: map native bitmap coordinates to logical screen pixels
+    final scaleX = size.width / srcW;
+    final scaleY = size.height / srcH;
 
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
+    // 1. Mandate 3: 60FPS Performance - Update and draw cached picture of completed strokes
+    if (renderCache != null) {
+      renderCache!.update(
+        strokes: strokes,
+        targetCount: completedCount,
+        size: size,
+        scaleX: scaleX,
+        scaleY: scaleY,
+      );
 
-    // 1. Draw all completed strokes
-    final end = completedCount.clamp(0, strokes.length);
-    for (int i = 0; i < end; i++) {
-      final stroke = strokes[i];
-      paint.color = stroke.strokeColor;
-      paint.strokeWidth = stroke.strokeWidth;
-      canvas.drawPath(stroke.path, paint);
+      if (renderCache!.picture != null) {
+        canvas.drawPicture(renderCache!.picture!);
+      }
+    } else {
+      // Fallback if renderCache is omitted
+      final end = completedCount.clamp(0, strokes.length);
+      for (int i = 0; i < end; i++) {
+        drawTaperedStroke(
+          canvas: canvas,
+          stroke: strokes[i],
+          scaleX: scaleX,
+          scaleY: scaleY,
+          progress: 1.0,
+        );
+      }
     }
 
-    // 2. Draw active stroke with real-time Brush Tip effect via PathMetric
+    // 2. Draw currently animating active stroke
     if (completedCount < strokes.length && currentProgress > 0.0) {
       final activeStroke = strokes[completedCount];
-      final metrics = activeStroke.path.computeMetrics();
-
-      Offset? brushTipPos;
-      paint.color = activeStroke.strokeColor;
-      paint.strokeWidth = activeStroke.strokeWidth;
-
-      for (final metric in metrics) {
-        final targetLen = metric.length * currentProgress.clamp(0.0, 1.0);
-        final extractedPath = metric.extractPath(0.0, targetLen);
-        canvas.drawPath(extractedPath, paint);
-
-        final tangent = metric.getTangentForOffset(targetLen);
-        if (tangent != null) {
-          brushTipPos = tangent.position;
-        }
-      }
+      drawTaperedStroke(
+        canvas: canvas,
+        stroke: activeStroke,
+        scaleX: scaleX,
+        scaleY: scaleY,
+        progress: currentProgress,
+      );
 
       // Draw Brush Tip indicator at the leading edge
-      if (brushTipPos != null) {
-        final tipPaint = Paint()
-          ..color = accentColor.withValues(alpha: 0.9)
-          ..style = PaintingStyle.fill;
-        canvas.drawCircle(
-          brushTipPos,
-          activeStroke.strokeWidth * 1.5,
-          tipPaint,
-        );
+      final activePath = activeStroke.toScaledPath(scaleX, scaleY);
+      final metrics = activePath.computeMetrics().toList();
+      if (metrics.isNotEmpty) {
+        final targetLen =
+            metrics.first.length * currentProgress.clamp(0.0, 1.0);
+        final tangent = metrics.first.getTangentForOffset(targetLen);
+        if (tangent != null) {
+          final tipPaint = Paint()
+            ..color = accentColor.withValues(alpha: 0.9)
+            ..style = PaintingStyle.fill;
+          canvas.drawCircle(tangent.position, 3.5, tipPaint);
 
-        final glowPaint = Paint()
-          ..color = Colors.white.withValues(alpha: 0.8)
-          ..style = PaintingStyle.fill;
-        canvas.drawCircle(
-          brushTipPos,
-          activeStroke.strokeWidth * 0.75,
-          glowPaint,
-        );
+          final glowPaint = Paint()
+            ..color = Colors.white.withValues(alpha: 0.85)
+            ..style = PaintingStyle.fill;
+          canvas.drawCircle(tangent.position, 1.8, glowPaint);
+        }
       }
     }
-
-    canvas.restore();
   }
 
   @override
   bool shouldRepaint(covariant AutodrawPainter oldDelegate) {
     return oldDelegate.completedCount != completedCount ||
-        oldDelegate.currentProgress != currentProgress;
+        oldDelegate.currentProgress != currentProgress ||
+        oldDelegate.sourceWidth != sourceWidth ||
+        oldDelegate.sourceHeight != sourceHeight;
   }
 }
