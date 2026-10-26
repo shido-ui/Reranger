@@ -65,10 +65,13 @@ void main() {
       const artifactDir =
           '/root/.gemini/antigravity-cli/brain/131f6c3f-f2c2-4492-b5c5-d64035cddb16';
       void saveArtifact(String name, Uint8List bytes) {
-        if (Directory(artifactDir).existsSync()) {
-          try {
+        try {
+          final dir = Directory(artifactDir);
+          if (dir.existsSync()) {
             File('$artifactDir/$name').writeAsBytesSync(bytes);
-          } catch (_) {}
+          }
+        } catch (_) {
+          // Gracefully ignore on environments without /root permissions (e.g. CI runner)
         }
       }
 
