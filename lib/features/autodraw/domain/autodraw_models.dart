@@ -107,18 +107,20 @@ class AutodrawCommand {
     required this.segments,
     this.isClosed = false,
     this.fillPoints,
-  }) : actionType = actionType ??
+  }) : actionType =
+           actionType ??
            (layer == AutodrawTonalLayer.background
                ? AutodrawActionType.drawLine
                : layer == AutodrawTonalLayer.midtones
-                   ? AutodrawActionType.fillRegion
-                   : AutodrawActionType.drawHighlight),
-       layer = layer ??
+               ? AutodrawActionType.fillRegion
+               : AutodrawActionType.drawHighlight),
+       layer =
+           layer ??
            (actionType == AutodrawActionType.drawLine
                ? AutodrawTonalLayer.background
                : actionType == AutodrawActionType.fillRegion
-                   ? AutodrawTonalLayer.midtones
-                   : AutodrawTonalLayer.highlights),
+               ? AutodrawTonalLayer.midtones
+               : AutodrawTonalLayer.highlights),
        strokeColor = strokeColor ?? color ?? const Color(0xFF1E1E24);
 
   /// Pass 1: The Sketch (Lines) - Contours drawn with strokeWidth = 1.5 in dark ink.

@@ -496,18 +496,17 @@ void main() {
         expect(
           r255 - g255,
           greaterThan(100),
-          reason:
-              'Fill stroke must be vibrant Red (red - green > 100), not dull Grey',
+          reason: 'Fill stroke must be vibrant Red (red - green > 100), not dull Grey',
         );
       }
 
-      // Assert sketch lines are dark contours with strokeWidth = 1.5
+      // Assert sketch lines are dark contours with dynamic strokeWidth
       final lineStrokes = result.strokes.where(
         (s) => s.actionType == AutodrawActionType.drawLine,
       );
       expect(lineStrokes, isNotEmpty);
       for (final line in lineStrokes) {
-        expect(line.strokeWidth, equals(1.5));
+        expect(line.strokeWidth, inInclusiveRange(1.0, 2.5));
       }
     });
 

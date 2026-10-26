@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'dart:ui';
 
 import '../domain/autodraw_models.dart';
+import 'autodraw_analysis_engine.dart';
 
 class _VectorizeTaskParams {
   final Uint8List rgbaBytes;
@@ -185,13 +186,31 @@ class PotraceVectorizer {
           segments.add(BezierSegment(cp1: cp1, cp2: cp2, end: p3));
         }
 
-        // Pass 1: strokeWidth = 1.5, charcoal black/dark grey ink with subtle tone
+        // Dynamic stroke width: Compute Sobel gradient along contour.
+        // Sharp edges produce thinner lines (down to 1.0px), softer edges 1.5 - 2.2px.
+        double contourGrad = 0.0;
+        for (final pt in simplified) {
+          contourGrad += AutodrawAnalysisEngine.computeSobelGradient(
+            pt.dx.round().clamp(0, width - 1),
+            pt.dy.round().clamp(0, height - 1),
+            lum,
+            width,
+            height,
+          );
+        }
+        contourGrad /= simplified.length;
+
+        final dynLineWidth = AutodrawAnalysisEngine.computeDynamicStrokeWidth(
+          gradient: contourGrad,
+          isEdgeLine: true,
+        );
+
         lineCommands.add(
           AutodrawCommand.drawLine(
             id: nextCommandId++,
             startPoint: simplified.first,
             segments: segments,
-            strokeWidth: 1.5,
+            strokeWidth: dynLineWidth,
             color: const Color(0xFF1E1E24),
             layer: AutodrawTonalLayer.background,
           ),
@@ -221,26 +240,16 @@ class PotraceVectorizer {
 
       final bandMask = Uint8List(total);
       int bandPixels = 0;
-      int sumR = 0, sumG = 0, sumB = 0;
 
       for (int i = 0; i < total; i++) {
         final l = lum[i];
         if (l >= low && l < high) {
           bandMask[i] = 1;
           bandPixels++;
-          final off = i * 4;
-          sumR += rgba[off];
-          sumG += rgba[off + 1];
-          sumB += rgba[off + 2];
         }
       }
 
       if (bandPixels == 0) continue;
-
-      // Sample average color of this tonal band directly from ProcessedBuffer
-      final avgBandR = (sumR / bandPixels).round().clamp(0, 255);
-      final avgBandG = (sumG / bandPixels).round().clamp(0, 255);
-      final avgBandB = (sumB / bandPixels).round().clamp(0, 255);
 
       // Determine tonal layer based on luminance for test and HUD categorization
       final bandMidLum = (low + high) / 2.0;
@@ -250,12 +259,20 @@ class PotraceVectorizer {
           ? AutodrawTonalLayer.highlights
           : AutodrawTonalLayer.midtones;
 
-      // SBR (Stroke-Based Rendering) broad artist fill strokes across the region
-      const fillStride = 6;
-      for (int y = 2; y < height - 2; y += fillStride) {
+      // Dynamic Stroke Density & Perceptual Color Sampling (Mandate 2):
+      // Local variance determines stroke density: high variance areas get denser passes (stride = 3)
+      for (int y = 2; y < height - 2;) {
         if (fillCommands.length >= maxFillPaths) break;
+        final rowVar = AutodrawAnalysisEngine.computeLocalVariance(
+          width ~/ 2,
+          y,
+          4,
+          lum,
+          width,
+          height,
+        );
+        final fillStride = (rowVar > 16.0) ? 3 : 6;
         int runStart = -1;
-        int runSumR = 0, runSumG = 0, runSumB = 0, runCount = 0;
 
         for (int x = 2; x < width - 2; x++) {
           if (fillCommands.length >= maxFillPaths) break;
@@ -264,16 +281,7 @@ class PotraceVectorizer {
           if (bandMask[idx] == 1) {
             if (runStart == -1) {
               runStart = x;
-              runSumR = 0;
-              runSumG = 0;
-              runSumB = 0;
-              runCount = 0;
             }
-            final off = idx * 4;
-            runSumR += rgba[off];
-            runSumG += rgba[off + 1];
-            runSumB += rgba[off + 2];
-            runCount++;
 
             final isEnd =
                 (x - runStart >= 24) ||
@@ -281,7 +289,8 @@ class PotraceVectorizer {
                 (bandMask[idx + 1] == 0);
 
             if (isEnd) {
-              if (runCount >= 3) {
+              final runLen = x - runStart + 1;
+              if (runLen >= 3) {
                 final p0 = Offset(runStart.toDouble(), y.toDouble());
                 final p3 = Offset(x.toDouble(), y.toDouble());
 
@@ -296,13 +305,38 @@ class PotraceVectorizer {
                   arcY.toDouble(),
                 );
 
-                // Sample local average color from the processed buffer
-                final localR = (runSumR / runCount).round().clamp(0, 255);
-                final localG = (runSumG / runCount).round().clamp(0, 255);
-                final localB = (runSumB / runCount).round().clamp(0, 255);
+                // Perceptual color sampling (CIELAB chromaticity & lightness averaging)
+                final perceptualColor =
+                    AutodrawAnalysisEngine.sampleRunPerceptualColor(
+                      rgba,
+                      width,
+                      height,
+                      runStart,
+                      x,
+                      y,
+                    );
+
+                // Dynamic stroke width: Compute Sobel gradient in region.
+                // Low gradients (flat colors) produce thicker brush fills (up to 15.0px).
+                final midRunX = (runStart + x) ~/ 2;
+                final runGrad = AutodrawAnalysisEngine.computeSobelGradient(
+                  midRunX,
+                  y,
+                  lum,
+                  width,
+                  height,
+                );
+                final dynFillWidth =
+                    AutodrawAnalysisEngine.computeDynamicStrokeWidth(
+                      gradient: runGrad,
+                      isEdgeLine: false,
+                    );
 
                 final localLum =
-                    (0.299 * localR + 0.587 * localG + 0.114 * localB).round();
+                    (0.299 * (perceptualColor.r * 255) +
+                            0.587 * (perceptualColor.g * 255) +
+                            0.114 * (perceptualColor.b * 255))
+                        .round();
                 final strokeLayer = localLum < 85
                     ? AutodrawTonalLayer.background
                     : localLum > 170
@@ -314,8 +348,8 @@ class PotraceVectorizer {
                     id: nextCommandId++,
                     startPoint: p0,
                     segments: [BezierSegment(cp1: cp1, cp2: cp2, end: p3)],
-                    color: Color.fromARGB(255, localR, localG, localB),
-                    strokeWidth: 8.5, // Broad painterly brush
+                    color: perceptualColor,
+                    strokeWidth: dynFillWidth,
                     isClosed: false,
                     layer: strokeLayer,
                   ),
@@ -327,6 +361,7 @@ class PotraceVectorizer {
             runStart = -1;
           }
         }
+        y += fillStride;
       }
 
       // Also add closed perimeter fills for the region to guarantee solid contour fill
@@ -379,12 +414,25 @@ class PotraceVectorizer {
               final cp = (p0 + p1) * 0.5;
               segs.add(BezierSegment(cp1: cp, cp2: cp, end: p1));
             }
+            final contourIndices = <int>[];
+            for (final pt in contour) {
+              contourIndices.add(
+                pt.dy.round().clamp(0, height - 1) * width +
+                    pt.dx.round().clamp(0, width - 1),
+              );
+            }
+            final contourColor = AutodrawAnalysisEngine.samplePerceptualColor(
+              rgba,
+              width,
+              height,
+              contourIndices,
+            );
             fillCommands.add(
               AutodrawCommand.fillRegion(
                 id: nextCommandId++,
                 startPoint: contour.first,
                 segments: segs,
-                color: Color.fromARGB(255, avgBandR, avgBandG, avgBandB),
+                color: contourColor,
                 strokeWidth: 6.0,
                 isClosed: true,
                 layer: regionLayer,
@@ -473,26 +521,41 @@ class PotraceVectorizer {
             segs.add(BezierSegment(cp1: cp, cp2: cp, end: p1));
           }
 
-          // Sample vibrant highlight color from processed buffer
-          final sampleOff = idx * 4;
-          final hiR = rgba[sampleOff];
-          final hiG = rgba[sampleOff + 1];
-          final hiB = rgba[sampleOff + 2];
+          // Dynamic stroke width & perceptual highlight color
+          final hiGrad = AutodrawAnalysisEngine.computeSobelGradient(
+            cx,
+            cy,
+            lum,
+            width,
+            height,
+          );
+          final hiWidth = (1.5 + (1.0 - (hiGrad / 255.0).clamp(0.0, 1.0)) * 0.7)
+              .clamp(1.5, 2.2);
 
-          // Boost highlight vibrancy towards glistening specular
-          final outR = math.max(hiR, 220);
-          final outG = math.max(hiG, 220);
-          final outB = math.max(hiB, 220);
-          final hiColor = (hiR > hiB && hiR > hiG && hiR > 150)
-              ? Color.fromARGB(255, hiR, hiG, hiB) // preserve warm/orange tone
-              : Color.fromARGB(255, outR, outG, outB);
+          final hiIndices = <int>[];
+          for (final pt in contour) {
+            hiIndices.add(
+              pt.dy.round().clamp(0, height - 1) * width +
+                  pt.dx.round().clamp(0, width - 1),
+            );
+          }
+          final percHiColor = AutodrawAnalysisEngine.samplePerceptualColor(
+            rgba,
+            width,
+            height,
+            hiIndices,
+          );
+          final outR = math.max((percHiColor.r * 255).round(), 215);
+          final outG = math.max((percHiColor.g * 255).round(), 215);
+          final outB = math.max((percHiColor.b * 255).round(), 215);
+          final hiColor = Color.fromARGB(255, outR, outG, outB);
 
           highlightCommands.add(
             AutodrawCommand.drawHighlight(
               id: nextCommandId++,
               startPoint: contour.first,
               segments: segs,
-              strokeWidth: 2.0,
+              strokeWidth: hiWidth,
               color: hiColor,
               layer: AutodrawTonalLayer.highlights,
             ),

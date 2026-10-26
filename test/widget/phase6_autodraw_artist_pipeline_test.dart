@@ -23,38 +23,40 @@ void main() {
       }
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(
-        const MethodChannel('com.reranger.app/media'),
-        (MethodCall call) async {
-          if (call.method == 'saveVideoToGallery') {
-            final filePath = call.arguments['filePath'] as String?;
-            final title = call.arguments['title'] as String? ?? 'video';
-            if (filePath != null) {
-              final parent = File(filePath).parent.path;
-              final galleryDir = Directory('$parent/gallery');
-              if (!galleryDir.existsSync()) galleryDir.createSync(recursive: true);
-              final dest = '${galleryDir.path}/$title.mp4';
-              File(filePath).copySync(dest);
-              return dest;
-            }
-            return 'content://media/external/video/media/4242';
-          }
-          if (call.method == 'encodeFramesToGallery') {
-            return 'content://media/external/video/media/4242';
-          }
-          if (call.method == 'encodeFramesToMp4') {
-            return call.arguments['outputPath'] as String?;
-          }
-          return null;
-        },
-      );
+            const MethodChannel('com.reranger.app/media'),
+            (MethodCall call) async {
+              if (call.method == 'saveVideoToGallery') {
+                final filePath = call.arguments['filePath'] as String?;
+                final title = call.arguments['title'] as String? ?? 'video';
+                if (filePath != null) {
+                  final parent = File(filePath).parent.path;
+                  final galleryDir = Directory('$parent/gallery');
+                  if (!galleryDir.existsSync()) {
+                    galleryDir.createSync(recursive: true);
+                  }
+                  final dest = '${galleryDir.path}/$title.mp4';
+                  File(filePath).copySync(dest);
+                  return dest;
+                }
+                return 'content://media/external/video/media/4242';
+              }
+              if (call.method == 'encodeFramesToGallery') {
+                return 'content://media/external/video/media/4242';
+              }
+              if (call.method == 'encodeFramesToMp4') {
+                return call.arguments['outputPath'] as String?;
+              }
+              return null;
+            },
+          );
     });
 
     tearDownAll(() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(
-        const MethodChannel('com.reranger.app/media'),
-        null,
-      );
+            const MethodChannel('com.reranger.app/media'),
+            null,
+          );
     });
 
     void saveVisualProof(String filename, Uint8List pngBytes) {
@@ -156,342 +158,339 @@ void main() {
       },
     );
 
-    test(
-      'MANDATE 1 & 2: Pre-Computed Pipeline produces strictly sorted commands: Lines -> Fills -> Highlights',
-      () async {
-        // Load real anime portrait fixture
-        final file = File(
-          'docs/evidence/prompt-09-a/corpus/ANIME-01-PORTRAIT.bmp',
-        );
-        expect(file.existsSync(), isTrue);
+    test('MANDATE 1 & 2: Pre-Computed Pipeline produces strictly sorted commands: Lines -> Fills -> Highlights', () async {
+      // Load real anime portrait fixture
+      final file = File(
+        'docs/evidence/prompt-09-a/corpus/ANIME-01-PORTRAIT.bmp',
+      );
+      expect(file.existsSync(), isTrue);
 
-        final rawBytes = file.readAsBytesSync();
-        final decoded = img.decodeImage(rawBytes)!;
-        final rgbaBytes = Uint8List.fromList(
-          decoded.getBytes(order: img.ChannelOrder.rgba),
-        );
+      final rawBytes = file.readAsBytesSync();
+      final decoded = img.decodeImage(rawBytes)!;
+      final rgbaBytes = Uint8List.fromList(
+        decoded.getBytes(order: img.ChannelOrder.rgba),
+      );
 
-        const vectorizer = PotraceVectorizer();
-        final result = await vectorizer.vectorizeImage(
-          rgbaBytes: rgbaBytes,
-          width: decoded.width,
-          height: decoded.height,
-          maxPaths: 2500,
-        );
+      const vectorizer = PotraceVectorizer();
+      final result = await vectorizer.vectorizeImage(
+        rgbaBytes: rgbaBytes,
+        width: decoded.width,
+        height: decoded.height,
+        maxPaths: 2500,
+      );
 
-        expect(result.commands, isNotEmpty);
-        expect(result.linesCount, greaterThan(100));
-        expect(result.fillsCount, greaterThan(100));
-        expect(result.highlightsCount, greaterThan(10));
+      expect(result.commands, isNotEmpty);
+      expect(result.linesCount, greaterThan(100));
+      expect(result.fillsCount, greaterThan(100));
+      expect(result.highlightsCount, greaterThan(10));
 
-        // Strict Sorting Verification: All Lines -> All Fills -> All Highlights
+      // Strict Sorting Verification: All Lines -> All Fills -> All Highlights
+      expect(
+        result.isSortedByTonalLayer,
+        isTrue,
+        reason: 'Pre-computed artist pipeline must be strictly ordered: All Lines -> All Fills -> All Highlights!',
+      );
+
+      // Verify Pass 1: Sketch Lines
+      final lines = result.commands.where(
+        (c) => c.actionType == AutodrawActionType.drawLine,
+      );
+      for (final line in lines) {
+        expect(line.strokeWidth, inInclusiveRange(1.0, 2.5));
+        final c = line.strokeColor;
+        // Dark ink / black
+        expect(c.r * 255, lessThan(45));
+        expect(c.g * 255, lessThan(45));
+        expect(c.b * 255, lessThan(45));
+      }
+
+      // Verify Pass 2: Fills
+      final fills = result.commands.where(
+        (c) => c.actionType == AutodrawActionType.fillRegion,
+      );
+      for (final fill in fills) {
         expect(
-          result.isSortedByTonalLayer,
-          isTrue,
-          reason:
-              'Pre-computed artist pipeline must be strictly ordered: All Lines -> All Fills -> All Highlights!',
+          fill.strokeWidth,
+          inInclusiveRange(6.0, 15.0),
+          reason: 'Fills must use dynamic broad brush width up to 15.0!',
         );
+      }
 
-        // Verify Pass 1: Sketch Lines
-        final lines = result.commands.where(
-          (c) => c.actionType == AutodrawActionType.drawLine,
-        );
-        for (final line in lines) {
-          expect(line.strokeWidth, equals(1.5));
-          final c = line.strokeColor;
-          // Dark ink / black
-          expect(c.r * 255, lessThan(45));
-          expect(c.g * 255, lessThan(45));
-          expect(c.b * 255, lessThan(45));
-        }
+      // Verify Pass 3: Highlights
+      final highlights = result.commands.where(
+        (c) => c.actionType == AutodrawActionType.drawHighlight,
+      );
+      for (final hi in highlights) {
+        expect(hi.strokeWidth, inInclusiveRange(1.5, 2.5));
+        final c = hi.strokeColor;
+        // Bright highlights
+        expect(c.r * 255, greaterThan(140));
+      }
 
-        // Verify Pass 2: Fills
-        final fills = result.commands.where(
-          (c) => c.actionType == AutodrawActionType.fillRegion,
+      // Generate Screenshot 2: Playback screen showing clean black sketch being filled with color
+      final playbackImg = img.Image(width: 360, height: 640, numChannels: 4);
+      img.fill(playbackImg, color: img.ColorRgba8(20, 20, 24, 255));
+
+      // Header Bar
+      img.fillRect(
+        playbackImg,
+        x1: 0,
+        y1: 0,
+        x2: 360,
+        y2: 56,
+        color: img.ColorRgba8(28, 28, 34, 255),
+      );
+      img.drawString(
+        playbackImg,
+        'Autodraw Studio',
+        font: img.arial14,
+        x: 20,
+        y: 20,
+        color: img.ColorRgba8(240, 240, 245, 255),
+      );
+
+      // "Save Video" button in Header
+      img.fillRect(
+        playbackImg,
+        x1: 235,
+        y1: 12,
+        x2: 345,
+        y2: 44,
+        color: img.ColorRgba8(90, 160, 255, 255),
+      );
+      img.drawString(
+        playbackImg,
+        'Save Video',
+        font: img.arial14,
+        x: 250,
+        y: 22,
+        color: img.ColorRgba8(10, 15, 30, 255),
+      );
+
+      // Drawing Canvas Viewport (White Paper Canvas)
+      img.fillRect(
+        playbackImg,
+        x1: 20,
+        y1: 76,
+        x2: 340,
+        y2: 430,
+        color: img.ColorRgba8(250, 250, 252, 255),
+      );
+
+      final scaleX = 320.0 / decoded.width;
+      final scaleY = 354.0 / decoded.height;
+
+      // Render:
+      // 1. All black sketch lines (Pass 1)
+      for (final line in lines) {
+        final startX = (20 + line.startPoint.dx * scaleX).round().clamp(
+          20,
+          340,
         );
-        for (final fill in fills) {
-          expect(
-            fill.strokeWidth,
-            greaterThanOrEqualTo(6.0),
-            reason: 'Fills must use a broad brush!',
+        final startY = (76 + line.startPoint.dy * scaleY).round().clamp(
+          76,
+          430,
+        );
+        int px = startX, py = startY;
+        for (final seg in line.segments) {
+          final ex = (20 + seg.end.dx * scaleX).round().clamp(20, 340);
+          final ey = (76 + seg.end.dy * scaleY).round().clamp(76, 430);
+          img.drawLine(
+            playbackImg,
+            x1: px,
+            y1: py,
+            x2: ex,
+            y2: ey,
+            color: img.ColorRgba8(28, 28, 34, 255),
           );
+          px = ex;
+          py = ey;
         }
+      }
 
-        // Verify Pass 3: Highlights
-        final highlights = result.commands.where(
-          (c) => c.actionType == AutodrawActionType.drawHighlight,
+      // 2. 60% of color fills (Pass 2 in progress: clean black sketch being actively filled with broad brush colors)
+      final fillList = fills.toList();
+      final activeFillCount = (fillList.length * 0.60).round();
+      for (int i = 0; i < activeFillCount; i++) {
+        final fill = fillList[i];
+        final startX = (20 + fill.startPoint.dx * scaleX).round().clamp(
+          20,
+          340,
         );
-        for (final hi in highlights) {
-          expect(hi.strokeWidth, equals(2.0));
-          final c = hi.strokeColor;
-          // Bright highlights
-          expect(c.r * 255, greaterThan(140));
-        }
-
-        // Generate Screenshot 2: Playback screen showing clean black sketch being filled with color
-        final playbackImg = img.Image(width: 360, height: 640, numChannels: 4);
-        img.fill(playbackImg, color: img.ColorRgba8(20, 20, 24, 255));
-
-        // Header Bar
-        img.fillRect(
-          playbackImg,
-          x1: 0,
-          y1: 0,
-          x2: 360,
-          y2: 56,
-          color: img.ColorRgba8(28, 28, 34, 255),
+        final startY = (76 + fill.startPoint.dy * scaleY).round().clamp(
+          76,
+          430,
         );
-        img.drawString(
-          playbackImg,
-          'Autodraw Studio',
-          font: img.arial14,
-          x: 20,
-          y: 20,
-          color: img.ColorRgba8(240, 240, 245, 255),
+        final fc = fill.strokeColor;
+        final fColor = img.ColorRgba8(
+          (fc.r * 255).round().clamp(0, 255),
+          (fc.g * 255).round().clamp(0, 255),
+          (fc.b * 255).round().clamp(0, 255),
+          230,
         );
 
-        // "Save Video" button in Header
-        img.fillRect(
-          playbackImg,
-          x1: 235,
-          y1: 12,
-          x2: 345,
-          y2: 44,
-          color: img.ColorRgba8(90, 160, 255, 255),
-        );
-        img.drawString(
-          playbackImg,
-          'Save Video',
-          font: img.arial14,
-          x: 250,
-          y: 22,
-          color: img.ColorRgba8(10, 15, 30, 255),
-        );
-
-        // Drawing Canvas Viewport (White Paper Canvas)
-        img.fillRect(
-          playbackImg,
-          x1: 20,
-          y1: 76,
-          x2: 340,
-          y2: 430,
-          color: img.ColorRgba8(250, 250, 252, 255),
-        );
-
-        final scaleX = 320.0 / decoded.width;
-        final scaleY = 354.0 / decoded.height;
-
-        // Render:
-        // 1. All black sketch lines (Pass 1)
-        for (final line in lines) {
-          final startX = (20 + line.startPoint.dx * scaleX).round().clamp(
-            20,
-            340,
-          );
-          final startY = (76 + line.startPoint.dy * scaleY).round().clamp(
-            76,
-            430,
-          );
-          int px = startX, py = startY;
-          for (final seg in line.segments) {
-            final ex = (20 + seg.end.dx * scaleX).round().clamp(20, 340);
-            final ey = (76 + seg.end.dy * scaleY).round().clamp(76, 430);
+        int px = startX, py = startY;
+        for (final seg in fill.segments) {
+          final ex = (20 + seg.end.dx * scaleX).round().clamp(20, 340);
+          final ey = (76 + seg.end.dy * scaleY).round().clamp(76, 430);
+          // Dynamic brush stroke (using fill.strokeWidth): thick fills up to 15px, thin details
+          final halfWidth = (fill.strokeWidth * 0.45).round().clamp(2, 7);
+          for (int w = -halfWidth; w <= halfWidth; w++) {
             img.drawLine(
               playbackImg,
               x1: px,
-              y1: py,
+              y1: py + w,
               x2: ex,
-              y2: ey,
-              color: img.ColorRgba8(28, 28, 34, 255),
+              y2: ey + w,
+              color: fColor,
             );
-            px = ex;
-            py = ey;
           }
+          px = ex;
+          py = ey;
         }
+      }
 
-        // 2. 60% of color fills (Pass 2 in progress: clean black sketch being actively filled with broad brush colors)
-        final fillList = fills.toList();
-        final activeFillCount = (fillList.length * 0.60).round();
-        for (int i = 0; i < activeFillCount; i++) {
-          final fill = fillList[i];
-          final startX = (20 + fill.startPoint.dx * scaleX).round().clamp(
-            20,
-            340,
-          );
-          final startY = (76 + fill.startPoint.dy * scaleY).round().clamp(
-            76,
-            430,
-          );
-          final fc = fill.strokeColor;
-          final fColor = img.ColorRgba8(
-            (fc.r * 255).round().clamp(0, 255),
-            (fc.g * 255).round().clamp(0, 255),
-            (fc.b * 255).round().clamp(0, 255),
-            230,
-          );
-
-          int px = startX, py = startY;
-          for (final seg in fill.segments) {
-            final ex = (20 + seg.end.dx * scaleX).round().clamp(20, 340);
-            final ey = (76 + seg.end.dy * scaleY).round().clamp(76, 430);
-            // Broad brush stroke (7-8px thick)
-            for (int w = -3; w <= 3; w++) {
-              img.drawLine(
-                playbackImg,
-                x1: px,
-                y1: py + w,
-                x2: ex,
-                y2: ey + w,
-                color: fColor,
-              );
-            }
-            px = ex;
-            py = ey;
-          }
-        }
-
-        // Active brush tip stylus at leading fill stroke
-        if (activeFillCount > 0) {
-          final activeFill = fillList[activeFillCount - 1];
-          final tipX = (20 + activeFill.startPoint.dx * scaleX).round().clamp(
-            20,
-            340,
-          );
-          final tipY = (76 + activeFill.startPoint.dy * scaleY).round().clamp(
-            76,
-            430,
-          );
-          img.fillCircle(
-            playbackImg,
-            x: tipX,
-            y: tipY,
-            radius: 5,
-            color: img.ColorRgba8(90, 160, 255, 255),
-          );
-          img.fillCircle(
-            playbackImg,
-            x: tipX,
-            y: tipY,
-            radius: 2,
-            color: img.ColorRgba8(255, 255, 255, 255),
-          );
-        }
-
-        // Bottom Controls HUD
-        img.fillRect(
-          playbackImg,
-          x1: 0,
-          y1: 440,
-          x2: 360,
-          y2: 640,
-          color: img.ColorRgba8(24, 24, 30, 255),
+      // Active brush tip stylus at leading fill stroke
+      if (activeFillCount > 0) {
+        final activeFill = fillList[activeFillCount - 1];
+        final tipX = (20 + activeFill.startPoint.dx * scaleX).round().clamp(
+          20,
+          340,
         );
-
-        // Progress text: Lines, Fills, Highlights
-        img.drawString(
-          playbackImg,
-          'Pass 2: Filling Color (${lines.length} Lines, $activeFillCount/${fillList.length} Fills)',
-          font: img.arial14,
-          x: 20,
-          y: 456,
-          color: img.ColorRgba8(220, 225, 240, 255),
+        final tipY = (76 + activeFill.startPoint.dy * scaleY).round().clamp(
+          76,
+          430,
         );
-
-        // Progress bar (65%)
-        img.fillRect(
-          playbackImg,
-          x1: 20,
-          y1: 486,
-          x2: 340,
-          y2: 492,
-          color: img.ColorRgba8(40, 40, 50, 255),
-        );
-        img.fillRect(
-          playbackImg,
-          x1: 20,
-          y1: 486,
-          x2: 228,
-          y2: 492,
-          color: img.ColorRgba8(90, 160, 255, 255),
-        );
-
-        // Bottom chips in horizontal scroll
         img.fillCircle(
           playbackImg,
-          x: 45,
-          y: 535,
-          radius: 18,
+          x: tipX,
+          y: tipY,
+          radius: 5,
           color: img.ColorRgba8(90, 160, 255, 255),
-        ); // Play/pause button
+        );
+        img.fillCircle(
+          playbackImg,
+          x: tipX,
+          y: tipY,
+          radius: 2,
+          color: img.ColorRgba8(255, 255, 255, 255),
+        );
+      }
 
-        // Chips
-        img.fillRect(
-          playbackImg,
-          x1: 75,
-          y1: 520,
-          x2: 155,
-          y2: 550,
-          color: img.ColorRgba8(35, 35, 45, 255),
-        );
-        img.drawString(
-          playbackImg,
-          'Lines: ${lines.length}',
-          font: img.arial14,
-          x: 85,
-          y: 528,
-          color: img.ColorRgba8(200, 205, 220, 255),
-        );
+      // Bottom Controls HUD
+      img.fillRect(
+        playbackImg,
+        x1: 0,
+        y1: 440,
+        x2: 360,
+        y2: 640,
+        color: img.ColorRgba8(24, 24, 30, 255),
+      );
 
-        img.fillRect(
-          playbackImg,
-          x1: 165,
-          y1: 520,
-          x2: 245,
-          y2: 550,
-          color: img.ColorRgba8(35, 35, 45, 255),
-        );
-        img.drawString(
-          playbackImg,
-          'Fills: ${fills.length}',
-          font: img.arial14,
-          x: 175,
-          y: 528,
-          color: img.ColorRgba8(200, 205, 220, 255),
-        );
+      // Progress text: Lines, Fills, Highlights
+      img.drawString(
+        playbackImg,
+        'Pass 2: Filling Color (${lines.length} Lines, $activeFillCount/${fillList.length} Fills)',
+        font: img.arial14,
+        x: 20,
+        y: 456,
+        color: img.ColorRgba8(220, 225, 240, 255),
+      );
 
-        img.fillRect(
-          playbackImg,
-          x1: 255,
-          y1: 520,
-          x2: 345,
-          y2: 550,
-          color: img.ColorRgba8(35, 35, 45, 255),
-        );
-        img.drawString(
-          playbackImg,
-          'Highlights: ${highlights.length}',
-          font: img.arial14,
-          x: 260,
-          y: 528,
-          color: img.ColorRgba8(200, 205, 220, 255),
-        );
+      // Progress bar (65%)
+      img.fillRect(
+        playbackImg,
+        x1: 20,
+        y1: 486,
+        x2: 340,
+        y2: 492,
+        color: img.ColorRgba8(40, 40, 50, 255),
+      );
+      img.fillRect(
+        playbackImg,
+        x1: 20,
+        y1: 486,
+        x2: 228,
+        y2: 492,
+        color: img.ColorRgba8(90, 160, 255, 255),
+      );
 
-        // 60FPS status badge
-        img.drawString(
-          playbackImg,
-          '60 FPS Sequenced Artist Playback',
-          font: img.arial14,
-          x: 65,
-          y: 580,
-          color: img.ColorRgba8(100, 240, 160, 255),
-        );
+      // Bottom chips in horizontal scroll
+      img.fillCircle(
+        playbackImg,
+        x: 45,
+        y: 535,
+        radius: 18,
+        color: img.ColorRgba8(90, 160, 255, 255),
+      ); // Play/pause button
 
-        saveVisualProof(
-          'autodraw_playback_clean_sketch_filled.png',
-          Uint8List.fromList(img.encodePng(playbackImg)),
-        );
-      },
-    );
+      // Chips
+      img.fillRect(
+        playbackImg,
+        x1: 75,
+        y1: 520,
+        x2: 155,
+        y2: 550,
+        color: img.ColorRgba8(35, 35, 45, 255),
+      );
+      img.drawString(
+        playbackImg,
+        'Lines: ${lines.length}',
+        font: img.arial14,
+        x: 85,
+        y: 528,
+        color: img.ColorRgba8(200, 205, 220, 255),
+      );
+
+      img.fillRect(
+        playbackImg,
+        x1: 165,
+        y1: 520,
+        x2: 245,
+        y2: 550,
+        color: img.ColorRgba8(35, 35, 45, 255),
+      );
+      img.drawString(
+        playbackImg,
+        'Fills: ${fills.length}',
+        font: img.arial14,
+        x: 175,
+        y: 528,
+        color: img.ColorRgba8(200, 205, 220, 255),
+      );
+
+      img.fillRect(
+        playbackImg,
+        x1: 255,
+        y1: 520,
+        x2: 345,
+        y2: 550,
+        color: img.ColorRgba8(35, 35, 45, 255),
+      );
+      img.drawString(
+        playbackImg,
+        'Highlights: ${highlights.length}',
+        font: img.arial14,
+        x: 260,
+        y: 528,
+        color: img.ColorRgba8(200, 205, 220, 255),
+      );
+
+      // 60FPS status badge
+      img.drawString(
+        playbackImg,
+        '60 FPS Sequenced Artist Playback',
+        font: img.arial14,
+        x: 65,
+        y: 580,
+        color: img.ColorRgba8(100, 240, 160, 255),
+      );
+
+      saveVisualProof(
+        'autodraw_playback_clean_sketch_filled.png',
+        Uint8List.fromList(img.encodePng(playbackImg)),
+      );
+    });
 
     testWidgets(
       'MANDATE 3 & 4: MediaStore Video Export saves to Movies/Reranger and shows "Video saved to Gallery!" SnackBar',
