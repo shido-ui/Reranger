@@ -264,12 +264,21 @@ class MainActivity : FlutterActivity() {
                             }
 
                             uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
-                                ?: throw IllegalStateException("Failed to create MediaStore entry for video")
+                            if (uri == null || uri.toString().isEmpty()) {
+                                throw IllegalStateException("MediaStore insert returned invalid/null URI")
+                            }
 
                             pfd = resolver.openFileDescriptor(uri, "rw")
-                                ?: throw IllegalStateException("Failed to open FileDescriptor for $uri")
+                            if (pfd == null) {
+                                throw IllegalStateException("Failed to open FileDescriptor for MediaStore URI: $uri")
+                            }
 
-                            encodeFramesNative(framePaths, null, pfd.fileDescriptor, width, height, fps, bitRate)
+                            val fd = pfd.fileDescriptor
+                            if (fd == null || !fd.valid()) {
+                                throw IllegalStateException("FileDescriptor for MediaStore URI: $uri is invalid")
+                            }
+
+                            encodeFramesNative(framePaths, null, fd, width, height, fps, bitRate)
 
                             pfd.close()
                             pfd = null
@@ -348,28 +357,61 @@ class MainActivity : FlutterActivity() {
         val frameDurationUs = (1_000_000L / fps)
 
         val yuvBuffer = ByteArray(evenWidth * evenHeight * 3 / 2)
+        var lastValidYuv: ByteArray? = null
+        var encodedFrameCount = 0
 
         for ((index, path) in framePaths.withIndex()) {
-            val bitmap = BitmapFactory.decodeFile(path) ?: continue
-            val scaled = if (bitmap.width != evenWidth || bitmap.height != evenHeight) {
-                Bitmap.createScaledBitmap(bitmap, evenWidth, evenHeight, true)
-            } else {
-                bitmap
+            val file = File(path)
+            var frameConverted = false
+
+            if (file.exists() && file.length() > 0L) {
+                if (path.endsWith(".raw")) {
+                    val rawBytes = file.readBytes()
+                    if (rawBytes.size >= evenWidth * evenHeight * 4) {
+                        rawRgbaToNV12(rawBytes, evenWidth, evenHeight, yuvBuffer)
+                        frameConverted = true
+                    }
+                } else {
+                    val bitmap = BitmapFactory.decodeFile(path)
+                    if (bitmap != null) {
+                        val scaled = if (bitmap.width != evenWidth || bitmap.height != evenHeight) {
+                            Bitmap.createScaledBitmap(bitmap, evenWidth, evenHeight, true)
+                        } else {
+                            bitmap
+                        }
+                        bitmapToNV12(scaled, evenWidth, evenHeight, yuvBuffer)
+                        if (scaled != bitmap) scaled.recycle()
+                        bitmap.recycle()
+                        frameConverted = true
+                    }
+                }
             }
 
-            // Convert ARGB to NV12 / YUV420SemiPlanar
-            bitmapToNV12(scaled, evenWidth, evenHeight, yuvBuffer)
-            if (scaled != bitmap) scaled.recycle()
-            bitmap.recycle()
+            // Mandate 3: If a frame drop occurs, repeat the last frame in the video encoder so timeline stays accurate
+            if (!frameConverted) {
+                if (lastValidYuv != null) {
+                    System.arraycopy(lastValidYuv, 0, yuvBuffer, 0, yuvBuffer.size)
+                    frameConverted = true
+                } else {
+                    continue
+                }
+            }
+
+            // Cache valid frame for subsequent drop recovery
+            if (lastValidYuv == null) {
+                lastValidYuv = ByteArray(yuvBuffer.size)
+            }
+            System.arraycopy(yuvBuffer, 0, lastValidYuv, 0, yuvBuffer.size)
 
             val inputBufferIndex = encoder.dequeueInputBuffer(10_000)
             if (inputBufferIndex >= 0) {
                 val inputBuffer = encoder.getInputBuffer(inputBufferIndex)
                 inputBuffer?.clear()
                 inputBuffer?.put(yuvBuffer)
-                val presentationTimeUs = index * frameDurationUs
+                val presentationTimeUs = encodedFrameCount * frameDurationUs
                 val flags = if (index == framePaths.size - 1) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0
                 encoder.queueInputBuffer(inputBufferIndex, 0, yuvBuffer.size, presentationTimeUs, flags)
+                encodedFrameCount++
             }
 
             // Drain output
@@ -417,6 +459,30 @@ class MainActivity : FlutterActivity() {
                 val r = (pixel shr 16) and 0xff
                 val g = (pixel shr 8) and 0xff
                 val b = pixel and 0xff
+
+                val y = ((66 * r + 129 * g + 25 * b + 128) shr 8) + 16
+                outYuv[yIndex++] = y.coerceIn(0, 255).toByte()
+
+                if (j % 2 == 0 && i % 2 == 0) {
+                    val u = ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
+                    val v = ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
+                    outYuv[uvIndex++] = u.coerceIn(0, 255).toByte()
+                    outYuv[uvIndex++] = v.coerceIn(0, 255).toByte()
+                }
+            }
+        }
+    }
+
+    private fun rawRgbaToNV12(rgba: ByteArray, width: Int, height: Int, outYuv: ByteArray) {
+        var yIndex = 0
+        var uvIndex = width * height
+
+        for (j in 0 until height) {
+            for (i in 0 until width) {
+                val pIdx = (j * width + i) * 4
+                val r = rgba[pIdx].toInt() and 0xff
+                val g = rgba[pIdx + 1].toInt() and 0xff
+                val b = rgba[pIdx + 2].toInt() and 0xff
 
                 val y = ((66 * r + 129 * g + 25 * b + 128) shr 8) + 16
                 outYuv[yIndex++] = y.coerceIn(0, 255).toByte()

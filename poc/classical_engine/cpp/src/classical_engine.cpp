@@ -1897,6 +1897,80 @@ StrokeBuffer* native_skeleton_trace(
         }
     }
 
+    // 2b. Mandate 1: 3x3 Median Filter to remove salt-and-pepper noise
+    std::vector<uint8_t> median_filtered(proc_w * proc_h, 0);
+    for (int y = 0; y < proc_h; ++y) {
+        int y_top = std::max(0, y - 1);
+        int y_bot = std::min(proc_h - 1, y + 1);
+        for (int x = 0; x < proc_w; ++x) {
+            int x_left = std::max(0, x - 1);
+            int x_right = std::min(proc_w - 1, x + 1);
+
+            int count = 0;
+            int total = 0;
+            for (int ny = y_top; ny <= y_bot; ++ny) {
+                int r_idx = ny * proc_w;
+                for (int nx = x_left; nx <= x_right; ++nx) {
+                    count += binary[r_idx + nx];
+                    total++;
+                }
+            }
+            median_filtered[y * proc_w + x] = (count >= (total + 1) / 2) ? 1 : 0;
+        }
+    }
+    binary = std::move(median_filtered);
+
+    // 2c. Mandate 1: Connected Component Analysis (CCA) - Delete isolated components < 15 px
+    std::vector<uint8_t> visited_cca(proc_w * proc_h, 0);
+    std::vector<int> component;
+    component.reserve(proc_w * proc_h / 4);
+    std::vector<int> q;
+    q.reserve(4096);
+
+    const int cca_dx[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+    const int cca_dy[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+
+    for (int y = 0; y < proc_h; ++y) {
+        for (int x = 0; x < proc_w; ++x) {
+            int idx = y * proc_w + x;
+            if (binary[idx] == 0 || visited_cca[idx]) continue;
+
+            component.clear();
+            q.clear();
+
+            visited_cca[idx] = 1;
+            q.push_back(idx);
+            component.push_back(idx);
+
+            size_t head = 0;
+            while (head < q.size()) {
+                int curr = q[head++];
+                int cx = curr % proc_w;
+                int cy = curr / proc_w;
+
+                for (int d = 0; d < 8; ++d) {
+                    int nx = cx + cca_dx[d];
+                    int ny = cy + cca_dy[d];
+                    if (nx >= 0 && nx < proc_w && ny >= 0 && ny < proc_h) {
+                        int nidx = ny * proc_w + nx;
+                        if (binary[nidx] == 1 && !visited_cca[nidx]) {
+                            visited_cca[nidx] = 1;
+                            q.push_back(nidx);
+                            component.push_back(nidx);
+                        }
+                    }
+                }
+            }
+
+            // Any isolated component smaller than 15 pixels must be deleted
+            if (component.size() < 15) {
+                for (int c_idx : component) {
+                    binary[c_idx] = 0;
+                }
+            }
+        }
+    }
+
     // 3. Medial Axis Distance Transform (2-pass Chamfer distance)
     std::vector<float> dist(proc_w * proc_h, 9999.0f);
     for (int i = 0; i < proc_w * proc_h; ++i) {
@@ -2044,11 +2118,11 @@ StrokeBuffer* native_skeleton_trace(
         }
         if (total_len < 6.0f || polyline.size() < 2) continue;
 
-        // RDP polyline simplification (epsilon = 1.2px)
+        // RDP polyline simplification (epsilon = 0.3px to preserve smooth curvature)
         std::vector<bool> keep(polyline.size(), false);
         keep.front() = true;
         keep.back() = true;
-        rdp_simplify(polyline, 0, static_cast<int>(polyline.size()) - 1, 1.2f, keep);
+        rdp_simplify(polyline, 0, static_cast<int>(polyline.size()) - 1, 0.3f, keep);
 
         std::vector<SkeletonPoint> simplified;
         for (size_t i = 0; i < polyline.size(); ++i) {

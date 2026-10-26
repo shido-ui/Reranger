@@ -175,8 +175,11 @@ class _AutodrawScreenState extends State<AutodrawScreen>
     final stopwatch = Stopwatch()..start();
     int pathsAdvancedInFrame = 0;
 
-    // Enforce 16ms frame budget and max 30-50 paths/frame
-    while (pathsAdvancedInFrame < _maxPathsPerFrame &&
+    // Mandate 3: Ensure Ticker is not skipping frames when CPU is loaded
+    final allowedMaxPaths = _recorder.isRecording ? 1 : _maxPathsPerFrame;
+
+    // Enforce 16ms frame budget
+    while (pathsAdvancedInFrame < allowedMaxPaths &&
         stopwatch.elapsedMilliseconds < 14) {
       if (_currentStrokeIndex >= strokes.length) {
         _isPlaying = false;
@@ -206,7 +209,11 @@ class _AutodrawScreenState extends State<AutodrawScreen>
     if (_recorder.isRecording && frameIdx % _recorder.captureCadence == 0) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted || !_recorder.isRecording) return;
-        final captured = await _recorder.captureFrame();
+        bool captured = await _recorder.captureFrame();
+        if (!captured && _recorder.recordedFrameCount > 0) {
+          // Mandate 3: If a frame drop occurs when CPU is loaded, repeat the last frame in video encoder
+          captured = await _recorder.repeatLastFrame();
+        }
         if (mounted && captured) {
           setState(() {}); // Update the Recorded: X frames UI counter
         }
@@ -221,6 +228,9 @@ class _AutodrawScreenState extends State<AutodrawScreen>
     setState(() => _isEncoding = true);
 
     try {
+      if (_recorder.recordedFrameCount == 0) {
+        await _recorder.captureFrame();
+      }
       // Mandate 4: 1080p resolution and 60fps frame rate for Instagram / TikTok
       final srcW = _vectorResult!.width > 0 ? _vectorResult!.width : 1080;
       final srcH = _vectorResult!.height > 0 ? _vectorResult!.height : 1080;
@@ -564,7 +574,7 @@ class AutodrawRenderCache {
     );
 
     if (_cachedImage != null) {
-      canvas.drawImage(_cachedImage!, Offset.zero, Paint());
+      canvas.drawImage(_cachedImage!, Offset.zero, Paint()..isAntiAlias = true);
     } else if (_cachedPicture != null) {
       canvas.drawPicture(_cachedPicture!);
     }
@@ -651,6 +661,7 @@ class AutodrawPainter extends CustomPainter {
         progress >= 0.85) {
       final fillAlpha = ((progress - 0.85) / 0.15).clamp(0.0, 1.0);
       final fillPaint = Paint()
+        ..isAntiAlias = true
         ..style = PaintingStyle.fill
         ..blendMode = BlendMode.srcOver
         ..color = stroke.strokeColor.withValues(
@@ -659,20 +670,34 @@ class AutodrawPainter extends CustomPainter {
       canvas.drawPath(scaledPath, fillPaint);
     }
 
+    final isFill = stroke.actionType == AutodrawActionType.fillRegion;
+    final isLine = stroke.actionType == AutodrawActionType.drawLine;
+    final baseColor = stroke.strokeColor;
+
+    // Mandate 2: When a line stroke is fully drawn, render continuous path with rounded joints & single-pixel width
+    if (isLine && progress >= 1.0) {
+      final paint = Paint()
+        ..isAntiAlias = true
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..blendMode = BlendMode.multiply
+        ..color = baseColor
+        ..strokeWidth = 1.0;
+      canvas.drawPath(scaledPath, paint);
+      return;
+    }
+
     final metrics = scaledPath.computeMetrics().toList();
     if (metrics.isEmpty) return;
 
-    final baseColor = stroke.strokeColor;
-    final isFill = stroke.actionType == AutodrawActionType.fillRegion;
-    final isLine = stroke.actionType == AutodrawActionType.drawLine;
-
     final maxAllowedWidth = isFill
-        ? stroke.strokeWidth.clamp(6.0, 16.0)
+        ? stroke.strokeWidth.clamp(4.0, 12.0)
         : isLine
-        ? stroke.strokeWidth.clamp(1.2, 2.0)
-        : stroke.strokeWidth.clamp(1.5, 2.5);
+        ? 1.0
+        : stroke.strokeWidth.clamp(1.0, 2.0);
 
-    final minWidth = isFill ? (maxAllowedWidth * 0.45) : 0.5;
+    final minWidth = isFill ? (maxAllowedWidth * 0.45) : 1.0;
 
     for (final metric in metrics) {
       final totalLen = metric.length;
@@ -687,7 +712,10 @@ class AutodrawPainter extends CustomPainter {
 
       for (int i = 0; i < segmentCount; i++) {
         final startD = i * (targetLen / segmentCount);
-        final endD = math.min((i + 1) * (targetLen / segmentCount), targetLen);
+        final endD = math.min(
+          (i + 1) * (targetLen / segmentCount) + 0.5,
+          targetLen,
+        );
         if (endD <= startD) continue;
 
         final segPath = metric.extractPath(startD, endD);
@@ -712,6 +740,7 @@ class AutodrawPainter extends CustomPainter {
         );
 
         final paint = Paint()
+          ..isAntiAlias = true
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round
           ..strokeJoin = StrokeJoin.round
@@ -750,7 +779,11 @@ class AutodrawPainter extends CustomPainter {
       );
 
       if (renderCache!.image != null) {
-        canvas.drawImage(renderCache!.image!, Offset.zero, Paint());
+        canvas.drawImage(
+          renderCache!.image!,
+          Offset.zero,
+          Paint()..isAntiAlias = true,
+        );
       } else if (renderCache!.picture != null) {
         canvas.drawPicture(renderCache!.picture!);
       }
@@ -788,11 +821,13 @@ class AutodrawPainter extends CustomPainter {
         final tangent = metrics.first.getTangentForOffset(targetLen);
         if (tangent != null) {
           final tipPaint = Paint()
+            ..isAntiAlias = true
             ..color = accentColor.withValues(alpha: 0.9)
             ..style = PaintingStyle.fill;
           canvas.drawCircle(tangent.position, 3.5, tipPaint);
 
           final glowPaint = Paint()
+            ..isAntiAlias = true
             ..color = Colors.white.withValues(alpha: 0.85)
             ..style = PaintingStyle.fill;
           canvas.drawCircle(tangent.position, 1.8, glowPaint);

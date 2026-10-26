@@ -38,6 +38,7 @@ class VideoTimelapseRecorder {
   });
 
   bool get isRecording => _isRecording;
+  bool get isCapturing => _isCapturing;
   int get recordedFrameCount => _recordedFrames;
   int get totalBytesWritten => _totalBytesWritten;
   List<String> get framePaths => List.unmodifiable(_framePaths);
@@ -123,12 +124,68 @@ class VideoTimelapseRecorder {
     }
   }
 
+  /// Records raw RGBA frame bytes directly into session scratch storage.
+  bool addRawFrame(Uint8List rawBytes) {
+    if (!_isRecording || _sessionDir == null) return false;
+    if (_totalBytesWritten + rawBytes.length > maxBufferBytes) return false;
+
+    final frameIndexStr = _recordedFrames.toString().padLeft(5, '0');
+    final framePath = '${_sessionDir!.path}/frame_$frameIndexStr.raw';
+
+    final file = File(framePath);
+    file.writeAsBytesSync(rawBytes, flush: false);
+
+    _framePaths.add(framePath);
+    _totalBytesWritten += rawBytes.length;
+    _recordedFrames++;
+    return true;
+  }
+
+  /// If a frame drop occurs when the CPU is loaded, repeat the last frame in the video encoder
+  /// so the timeline stays accurate and no 0-frame or stutter drops occur.
+  Future<bool> repeatLastFrame() async {
+    if (!_isRecording || _sessionDir == null || _framePaths.isEmpty) {
+      return false;
+    }
+    if (_totalBytesWritten >= maxBufferBytes) return false;
+
+    try {
+      final lastPath = _framePaths.last;
+      final lastFile = File(lastPath);
+      if (!lastFile.existsSync()) return false;
+
+      final lastBytes = lastFile.readAsBytesSync();
+      if (_totalBytesWritten + lastBytes.length > maxBufferBytes) return false;
+
+      final frameIndexStr = _recordedFrames.toString().padLeft(5, '0');
+      final framePath = '${_sessionDir!.path}/frame_$frameIndexStr.raw';
+
+      final file = File(framePath);
+      file.writeAsBytesSync(lastBytes, flush: false);
+
+      _framePaths.add(framePath);
+      _totalBytesWritten += lastBytes.length;
+      _recordedFrames++;
+      debugPrint(
+        '[VideoTimelapseRecorder] Frame repeated (drop recovered): $_recordedFrames',
+      );
+      return true;
+    } catch (e) {
+      debugPrint('[VideoTimelapseRecorder] repeatLastFrame exception: $e');
+      return false;
+    }
+  }
+
   /// Frame capture tick called from Flutter Ticker / AnimationController loop.
   /// Captures every [captureCadence] frames, streams raw bytes to disk immediately,
   /// and disposes [ui.Image] instantly with zero memory accumulation.
   Future<bool> captureTick(int frameIndex) async {
     if (frameIndex % captureCadence != 0) return false;
-    return await captureFrame();
+    final captured = await captureFrame();
+    if (!captured && _recordedFrames > 0) {
+      return await repeatLastFrame();
+    }
+    return captured;
   }
 
   /// Stitches recorded frames into an H.264 MP4 video, cleans up temp files,
@@ -140,6 +197,14 @@ class VideoTimelapseRecorder {
     int bitRate = 8000000,
   }) async {
     _isRecording = false;
+
+    if (_framePaths.isEmpty) {
+      await captureFrame();
+    }
+    while (_framePaths.isNotEmpty && _framePaths.length < 15) {
+      final ok = await repeatLastFrame();
+      if (!ok) break;
+    }
 
     if (_framePaths.isEmpty) {
       await cleanup();
@@ -200,6 +265,14 @@ class VideoTimelapseRecorder {
     String? title,
   }) async {
     _isRecording = false;
+
+    if (_framePaths.isEmpty) {
+      await captureFrame();
+    }
+    while (_framePaths.isNotEmpty && _framePaths.length < 15) {
+      final ok = await repeatLastFrame();
+      if (!ok) break;
+    }
 
     if (_framePaths.isEmpty) {
       await cleanup();

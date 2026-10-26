@@ -195,6 +195,77 @@ class PotraceVectorizer {
       }
     }
 
+    // 1b. Mandate 1: 3x3 Median Filter to remove salt-and-pepper noise
+    final medianFiltered = Uint8List(total);
+    for (int y = 0; y < height; y++) {
+      final yTop = math.max(0, y - 1);
+      final yBot = math.min(height - 1, y + 1);
+      for (int x = 0; x < width; x++) {
+        final xLeft = math.max(0, x - 1);
+        final xRight = math.min(width - 1, x + 1);
+
+        int count = 0;
+        int winTotal = 0;
+        for (int ny = yTop; ny <= yBot; ny++) {
+          final rIdx = ny * width;
+          for (int nx = xLeft; nx <= xRight; nx++) {
+            count += binaryMap[rIdx + nx];
+            winTotal++;
+          }
+        }
+        medianFiltered[y * width + x] = (count >= (winTotal + 1) ~/ 2) ? 1 : 0;
+      }
+    }
+    binaryMap.setAll(0, medianFiltered);
+
+    // 1c. Mandate 1: Connected Component Analysis (CCA) - Delete components < 15 px
+    final visitedCca = Uint8List(total);
+    final component = <int>[];
+    final queue = <int>[];
+    const ccaDx = [-1, 0, 1, -1, 1, -1, 0, 1];
+    const ccaDy = [-1, -1, -1, 0, 0, 1, 1, 1];
+
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final idx = y * width + x;
+        if (binaryMap[idx] == 0 || visitedCca[idx] == 1) continue;
+
+        component.clear();
+        queue.clear();
+
+        visitedCca[idx] = 1;
+        queue.add(idx);
+        component.add(idx);
+
+        int head = 0;
+        while (head < queue.length) {
+          final curr = queue[head++];
+          final cx = curr % width;
+          final cy = curr ~/ width;
+
+          for (int d = 0; d < 8; d++) {
+            final nx = cx + ccaDx[d];
+            final ny = cy + ccaDy[d];
+            if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+              final nidx = ny * width + nx;
+              if (binaryMap[nidx] == 1 && visitedCca[nidx] == 0) {
+                visitedCca[nidx] = 1;
+                queue.add(nidx);
+                component.add(nidx);
+              }
+            }
+          }
+        }
+
+        // Isolated component smaller than 15 pixels must be deleted
+        if (component.length < 15) {
+          for (final cIdx in component) {
+            binaryMap[cIdx] = 0;
+          }
+        }
+      }
+    }
+
     // 2. Medial Axis via 2-Pass Chamfer Distance Transform
     final distMap = Uint16List(total);
     for (int i = 0; i < total; i++) {
@@ -369,8 +440,8 @@ class PotraceVectorizer {
         }
         if (strokeLen < 6.0 && polyline.length < 5) continue;
 
-        // Simplify using Ramer-Douglas-Peucker (RDP) epsilon = 1.2px
-        final simplified = _rdpSimplify(polyline, 1.2);
+        // Simplify using Ramer-Douglas-Peucker (RDP) epsilon = 0.3px to preserve smooth curvature
+        final simplified = _rdpSimplify(polyline, 0.3);
         if (simplified.length < 2) continue;
 
         candidateStrokes.add(simplified);

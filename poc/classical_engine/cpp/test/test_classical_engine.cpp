@@ -511,6 +511,52 @@ void test_skeleton_vectorization() {
     std::cout << "[PASS] test_skeleton_vectorization passed." << std::endl;
 }
 
+void test_autodraw_despeckle_and_cca() {
+    std::cout << "[RUN] test_autodraw_despeckle_and_cca (3x3 Median & 15px CCA)..." << std::endl;
+    const int w = 128, h = 128;
+    std::vector<uint8_t> src(w * h * 4, 255); // White canvas
+
+    // Add isolated salt-and-pepper noise specks (< 15 pixels)
+    // 1. Single-pixel specks
+    src[(5 * w + 5) * 4] = 0;
+    src[(15 * w + 80) * 4] = 0;
+    src[(100 * w + 20) * 4] = 0;
+
+    // 2. 3x3 isolated noise blob (9 pixels < 15 pixels)
+    for (int y = 10; y < 13; ++y) {
+        for (int x = 10; x < 13; ++x) {
+            int off = (y * w + x) * 4;
+            src[off] = 10;
+            src[off + 1] = 10;
+            src[off + 2] = 10;
+        }
+    }
+
+    // 3. Real structural line (length 60px > 15 pixels)
+    for (int y = 30; y < 90; ++y) {
+        int off = (y * w + 60) * 4;
+        src[off] = 10;
+        src[off + 1] = 10;
+        src[off + 2] = 10;
+    }
+
+    StrokeBuffer* buffer = native_skeleton_trace(src.data(), w, h, 60);
+    assert(buffer != nullptr);
+    assert(buffer->stroke_count >= 1);
+
+    // Verify none of the extracted stroke points are located in the noise specks (x < 20, y < 20)
+    for (int p = 0; p < buffer->total_points; ++p) {
+        int16_t px = buffer->points_x_y[p * 2];
+        int16_t py = buffer->points_x_y[p * 2 + 1];
+        // Must NOT be in the isolated 3x3 noise blob region [10..13, 10..13]
+        bool in_blob = (px >= 8 && px <= 15 && py >= 8 && py <= 15);
+        assert(!in_blob);
+    }
+
+    native_stroke_buffer_free(buffer);
+    std::cout << "[PASS] test_autodraw_despeckle_and_cca passed." << std::endl;
+}
+
 void test_watercolor_wash() {
     std::cout << "[TEST] Running test_watercolor_wash..." << std::endl;
     const int w = 64, h = 64;
@@ -700,6 +746,7 @@ int main() {
     test_armor_attack_and_ssim();
     test_sensor_noise_and_ssim();
     test_skeleton_vectorization();
+    test_autodraw_despeckle_and_cca();
     test_bilateral_filter_sanitization();
     test_eot_robustness_and_linf_16();
     test_inject_jpeg_quantization_artifacts();
