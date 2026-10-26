@@ -65,22 +65,199 @@ void native_sobel_edges(const uint8_t* src, uint8_t* dst, int width, int height)
     }
 }
 
+static inline float hash_2d_to_norm(int x, int y, uint32_t seed) {
+    uint32_t h = (static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u + seed * 1013904223u) & 0x7FFFFFFFu;
+    h = (h ^ (h >> 13)) * 1274126177u & 0x7FFFFFFFu;
+    return ((h & 0xFFFFu) / 32767.5f) - 1.0f; // [-1.0f, 1.0f]
+}
+
+static inline float coherent_noise_2d(float x, float y, uint32_t seed) {
+    const float fx = x / 2.5f;
+    const float fy = y / 2.5f;
+    const int x0 = static_cast<int>(std::floor(fx));
+    const int y0 = static_cast<int>(std::floor(fy));
+    const int x1 = x0 + 1;
+    const int y1 = y0 + 1;
+
+    const float tx = fx - static_cast<float>(x0);
+    const float ty = fy - static_cast<float>(y0);
+    const float sx = tx * tx * (3.0f - 2.0f * tx);
+    const float sy = ty * ty * (3.0f - 2.0f * ty);
+
+    const float v00 = hash_2d_to_norm(x0, y0, seed);
+    const float v10 = hash_2d_to_norm(x1, y0, seed);
+    const float v01 = hash_2d_to_norm(x0, y1, seed);
+    const float v11 = hash_2d_to_norm(x1, y1, seed);
+
+    const float n1 = (1.0f - sx) * (1.0f - sy) * v00 +
+                     sx * (1.0f - sy) * v10 +
+                     (1.0f - sx) * sy * v01 +
+                     sx * sy * v11;
+
+    // Second micro-octave for fine paper tooth
+    const float fx2 = x / 1.25f;
+    const float fy2 = y / 1.25f;
+    const int x0_2 = static_cast<int>(std::floor(fx2));
+    const int y0_2 = static_cast<int>(std::floor(fy2));
+    const float tx2 = fx2 - static_cast<float>(x0_2);
+    const float ty2 = fy2 - static_cast<float>(y0_2);
+    const float sx2 = tx2 * tx2 * (3.0f - 2.0f * tx2);
+    const float sy2 = ty2 * ty2 * (3.0f - 2.0f * ty2);
+
+    const float w00 = hash_2d_to_norm(x0_2, y0_2, seed + 101u);
+    const float w10 = hash_2d_to_norm(x0_2 + 1, y0_2, seed + 101u);
+    const float w01 = hash_2d_to_norm(x0_2, y0_2 + 1, seed + 101u);
+    const float w11 = hash_2d_to_norm(x0_2 + 1, y0_2 + 1, seed + 101u);
+
+    const float n2 = (1.0f - sx2) * (1.0f - sy2) * w00 +
+                     sx2 * (1.0f - sy2) * w10 +
+                     (1.0f - sx2) * sy2 * w01 +
+                     sx2 * sy2 * w11;
+
+    return 0.75f * n1 + 0.25f * n2;
+}
+
+static inline float blend_soft_light(float base_norm, float blend_norm) {
+    const float a = std::clamp(base_norm, 0.0f, 1.0f);
+    const float b = std::clamp(blend_norm, 0.0f, 1.0f);
+    return (1.0f - 2.0f * b) * (a * a) + 2.0f * b * a;
+}
+
 void native_grain_overlay(const uint8_t* src, uint8_t* dst, int width, int height, uint32_t seed, float intensity) {
+    if (!src || !dst || width <= 0 || height <= 0) return;
+    const float eff_intensity = std::clamp(intensity * 0.35f, 0.01f, 0.12f);
+
+    for (int y = 0; y < height; ++y) {
+        const int row_off = y * width;
+        for (int x = 0; x < width; ++x) {
+            const int off = (row_off + x) * 4;
+            const uint8_t a = src[off + 3];
+            if (a == 0) {
+                dst[off] = dst[off + 1] = dst[off + 2] = dst[off + 3] = 0;
+                continue;
+            }
+
+            const float n = coherent_noise_2d(static_cast<float>(x), static_cast<float>(y), seed);
+            const float blend = 0.5f + 0.5f * n * eff_intensity;
+            const float alpha_factor = a / 255.0f;
+
+            for (int c = 0; c < 3; ++c) {
+                const float raw_norm = src[off + c] / 255.0f;
+                const float base_norm = std::clamp(raw_norm, 0.04f, 0.96f);
+                const float soft = blend_soft_light(base_norm, blend);
+                const float textured = raw_norm + (soft - base_norm);
+                const float blended = raw_norm + (textured - raw_norm) * alpha_factor;
+                dst[off + c] = static_cast<uint8_t>(std::clamp(std::round(blended * 255.0f), 0.0f, 255.0f));
+            }
+            dst[off + 3] = a;
+        }
+    }
+}
+
+void native_watercolor_wash(
+    const uint8_t* src,
+    uint8_t* dst,
+    int width,
+    int height,
+    int wash_diffusion,
+    float wet_edge_bleed,
+    float paper_tooth,
+    uint32_t seed
+) {
+    if (!src || !dst || width <= 0 || height <= 0) return;
     const int total = width * height;
-    uint32_t state = seed;
-    const float scale = intensity * 128.0f;
+    const int rad = std::clamp(wash_diffusion, 1, 6);
+    const float eff_tooth = std::clamp(paper_tooth * 0.35f, 0.01f, 0.12f);
 
-    for (int i = 0; i < total; ++i) {
-        const int off = i * 4;
-        state = state * 1664525u + 1013904223u;
-        float noise = (((state & 0xFFFFu) / 32768.0f) - 1.0f) * scale;
-        const float alpha_factor = src[off + 3] / 255.0f;
-        const float effective_noise = noise * alpha_factor;
+    std::vector<uint8_t> temp(total * 4);
 
-        dst[off] = static_cast<uint8_t>(std::clamp(std::round(src[off] + effective_noise), 0.0f, 255.0f));
-        dst[off + 1] = static_cast<uint8_t>(std::clamp(std::round(src[off + 1] + effective_noise), 0.0f, 255.0f));
-        dst[off + 2] = static_cast<uint8_t>(std::clamp(std::round(src[off + 2] + effective_noise), 0.0f, 255.0f));
-        dst[off + 3] = src[off + 3];
+    // 1. Horizontal diffusion (strictly row-major: y * width + x)
+    for (int y = 0; y < height; ++y) {
+        const int row_off = y * width;
+        for (int x = 0; x < width; ++x) {
+            int r_sum = 0, g_sum = 0, b_sum = 0, count = 0;
+            for (int kx = -rad; kx <= rad; ++kx) {
+                const int px = std::clamp(x + kx, 0, width - 1);
+                const int off = (row_off + px) * 4;
+                r_sum += src[off];
+                g_sum += src[off + 1];
+                b_sum += src[off + 2];
+                count++;
+            }
+            const int dest_off = (row_off + x) * 4;
+            temp[dest_off] = static_cast<uint8_t>(r_sum / count);
+            temp[dest_off + 1] = static_cast<uint8_t>(g_sum / count);
+            temp[dest_off + 2] = static_cast<uint8_t>(b_sum / count);
+            temp[dest_off + 3] = src[dest_off + 3];
+        }
+    }
+
+    // 2. Vertical diffusion + edge pigment pooling + coherent paper grain (row-major: y * width + x)
+    for (int y = 0; y < height; ++y) {
+        const int row_off = y * width;
+        for (int x = 0; x < width; ++x) {
+            int r_sum = 0, g_sum = 0, b_sum = 0, count = 0;
+            for (int ky = -rad; ky <= rad; ++ky) {
+                const int py = std::clamp(y + ky, 0, height - 1);
+                const int sample_off = (py * width + x) * 4;
+                r_sum += temp[sample_off];
+                g_sum += temp[sample_off + 1];
+                b_sum += temp[sample_off + 2];
+                count++;
+            }
+
+            const int off = (row_off + x) * 4;
+            const uint8_t a = src[off + 3];
+            if (a == 0) {
+                dst[off] = dst[off + 1] = dst[off + 2] = dst[off + 3] = 0;
+                continue;
+            }
+
+            const float diffused_r = static_cast<float>(r_sum / count);
+            const float diffused_g = static_cast<float>(g_sum / count);
+            const float diffused_b = static_cast<float>(b_sum / count);
+
+            float r = diffused_r * 0.70f + static_cast<float>(src[off]) * 0.30f;
+            float g = diffused_g * 0.70f + static_cast<float>(src[off + 1]) * 0.30f;
+            float b = diffused_b * 0.70f + static_cast<float>(src[off + 2]) * 0.30f;
+
+            // Edge gradient for wet pooling
+            const int left_x = (x > 0 ? x - 1 : 0);
+            const int right_x = (x < width - 1 ? x + 1 : width - 1);
+            const int top_y = (y > 0 ? y - 1 : 0);
+            const int bot_y = (y < height - 1 ? y + 1 : height - 1);
+
+            const int left_off = (row_off + left_x) * 4;
+            const int right_off = (row_off + right_x) * 4;
+            const int top_off = (top_y * width + x) * 4;
+            const int bot_off = (bot_y * width + x) * 4;
+
+            const int gx = std::abs(src[right_off] - src[left_off]) +
+                           std::abs(src[right_off + 1] - src[left_off + 1]) +
+                           std::abs(src[right_off + 2] - src[left_off + 2]);
+            const int gy = std::abs(src[bot_off] - src[top_off]) +
+                           std::abs(src[bot_off + 1] - src[top_off + 1]) +
+                           std::abs(src[bot_off + 2] - src[top_off + 2]);
+            const float grad = std::min(255.0f, static_cast<float>(gx + gy) / 3.0f);
+
+            const float edge_darken = 1.0f - (grad / 255.0f) * wet_edge_bleed * 0.45f;
+            r *= edge_darken;
+            g *= edge_darken;
+            b *= edge_darken;
+
+            // Coherent paper grain noise with SoftLight blend
+            const float noise = coherent_noise_2d(static_cast<float>(x), static_cast<float>(y), seed);
+            const float tooth_blend = 0.5f + 0.5f * noise * eff_tooth;
+
+            const float r_soft = blend_soft_light(std::clamp(r / 255.0f, 0.0f, 1.0f), tooth_blend);
+            const float g_soft = blend_soft_light(std::clamp(g / 255.0f, 0.0f, 1.0f), tooth_blend);
+            const float b_soft = blend_soft_light(std::clamp(b / 255.0f, 0.0f, 1.0f), tooth_blend);
+
+            dst[off] = static_cast<uint8_t>(std::clamp(std::round(r_soft * 255.0f), 0.0f, 255.0f));
+            dst[off + 1] = static_cast<uint8_t>(std::clamp(std::round(g_soft * 255.0f), 0.0f, 255.0f));
+            dst[off + 2] = static_cast<uint8_t>(std::clamp(std::round(b_soft * 255.0f), 0.0f, 255.0f));
+            dst[off + 3] = a;
+        }
     }
 }
 
@@ -560,9 +737,9 @@ void native_adaptive_vibrancy(
         const float g_lin = srgb_to_linear(src[off + 1] / 255.0f);
         const float b_lin = srgb_to_linear(src[off + 2] / 255.0f);
 
-        const float x = (0.4124564f * r_lin + 0.3575761f * g_lin + 0.1804375f * b_lin) / 0.95047f;
-        const float y = (0.2126729f * r_lin + 0.7151522f * g_lin + 0.0721750f * b_lin) / 1.00000f;
-        const float z = (0.0193339f * r_lin + 0.1191920f * g_lin + 0.9503041f * b_lin) / 1.08883f;
+        const float x = std::clamp((0.4124564f * r_lin + 0.3575761f * g_lin + 0.1804375f * b_lin) / 0.95047f, 0.0f, 1.0f);
+        const float y = std::clamp((0.2126729f * r_lin + 0.7151522f * g_lin + 0.0721750f * b_lin) / 1.00000f, 0.0f, 1.0f);
+        const float z = std::clamp((0.0193339f * r_lin + 0.1191920f * g_lin + 0.9503041f * b_lin) / 1.08883f, 0.0f, 1.0f);
 
         const float fx = lab_f(x);
         const float fy = lab_f(y);
@@ -590,14 +767,14 @@ void native_adaptive_vibrancy(
             }
         }
 
-        // Convert back to sRGB
+        // Convert back to sRGB with float32 precision and clamped intermediate XYZ
         const float out_fy = (lab_l + 16.0f) / 116.0f;
         const float out_fx = out_fy + lab_a / 500.0f;
         const float out_fz = out_fy - lab_b / 200.0f;
 
-        const float out_x = 0.95047f * lab_inv_f(out_fx);
-        const float out_y = 1.00000f * lab_inv_f(out_fy);
-        const float out_z = 1.08883f * lab_inv_f(out_fz);
+        const float out_x = std::clamp(0.95047f * lab_inv_f(out_fx), 0.0f, 1.0f);
+        const float out_y = std::clamp(1.00000f * lab_inv_f(out_fy), 0.0f, 1.0f);
+        const float out_z = std::clamp(1.08883f * lab_inv_f(out_fz), 0.0f, 1.0f);
 
         const float out_r_lin =  3.2404542f * out_x - 1.5371385f * out_y - 0.4985314f * out_z;
         const float out_g_lin = -0.9692660f * out_x + 1.8760108f * out_y + 0.0415560f * out_z;
@@ -611,116 +788,29 @@ void native_adaptive_vibrancy(
 }
 
 // ============================================================================
-// EdgeTAM Zero-Shot Semantic Segmentation (ExecuTorch / LiteRT Mobile Runtime)
+// SAM 2.1 (Hiera-Small) Neural Segmentation & CIELAB Math Mode Magic Wand
 // ============================================================================
 
-struct EdgeTamEngineContext {
+struct Sam2EngineContext {
     std::string model_path;
     bool is_initialized = true;
 };
 
-void* native_edgetam_create(const char* model_path) {
-    auto* ctx = new EdgeTamEngineContext();
+void* native_sam2_create(const char* model_path) {
+    auto* ctx = new Sam2EngineContext();
     if (model_path) {
         ctx->model_path = model_path;
     }
     return static_cast<void*>(ctx);
 }
 
-void native_edgetam_destroy(void* handle) {
+void native_sam2_destroy(void* handle) {
     if (handle) {
-        delete static_cast<EdgeTamEngineContext*>(handle);
+        delete static_cast<Sam2EngineContext*>(handle);
     }
 }
 
-void native_edgetam_map_view_to_padded(
-    float view_x, float view_y,
-    float view_w, float view_h,
-    int src_w, int src_h,
-    float* out_src_x, float* out_src_y,
-    float* out_pad_x, float* out_pad_y,
-    int* out_active_w_1024, int* out_active_h_1024
-) {
-    if (src_w <= 0 || src_h <= 0 || view_w <= 0.0f || view_h <= 0.0f) {
-        if (out_src_x) *out_src_x = 0.0f;
-        if (out_src_y) *out_src_y = 0.0f;
-        if (out_pad_x) *out_pad_x = 0.0f;
-        if (out_pad_y) *out_pad_y = 0.0f;
-        if (out_active_w_1024) *out_active_w_1024 = 1024;
-        if (out_active_h_1024) *out_active_h_1024 = 1024;
-        return;
-    }
-
-    // 1. BoxFit.contain scale factor
-    const float scale = std::min(view_w / (float)src_w, view_h / (float)src_h);
-    const float rendered_w = src_w * scale;
-    const float rendered_h = src_h * scale;
-
-    // 2. Letterbox/pillarbox offset (centered)
-    const float offset_x = (view_w - rendered_w) * 0.5f;
-    const float offset_y = (view_h - rendered_h) * 0.5f;
-
-    // 3. Undo letterbox -> Source bitmap coordinate
-    const float src_x = std::clamp((view_x - offset_x) / scale, 0.0f, (float)(src_w - 1));
-    const float src_y = std::clamp((view_y - offset_y) / scale, 0.0f, (float)(src_h - 1));
-    if (out_src_x) *out_src_x = src_x;
-    if (out_src_y) *out_src_y = src_y;
-
-    // 4. Scale into 1024x1024 top-left padded square (longest edge = 1024)
-    const int max_src_dim = std::max(src_w, src_h);
-    const float pad_scale = 1024.0f / (float)max_src_dim;
-    const int active_w = std::clamp(static_cast<int>(std::round(src_w * pad_scale)), 1, 1024);
-    const int active_h = std::clamp(static_cast<int>(std::round(src_h * pad_scale)), 1, 1024);
-    if (out_active_w_1024) *out_active_w_1024 = active_w;
-    if (out_active_h_1024) *out_active_h_1024 = active_h;
-
-    const float pad_x = std::clamp(src_x * pad_scale, 0.0f, (float)(active_w - 1));
-    const float pad_y = std::clamp(src_y * pad_scale, 0.0f, (float)(active_h - 1));
-    if (out_pad_x) *out_pad_x = pad_x;
-    if (out_pad_y) *out_pad_y = pad_y;
-}
-
-void native_edgetam_resample_mask_to_source(
-    const uint8_t* in_mask_1024,
-    int active_w_1024, int active_h_1024,
-    uint8_t* out_mask_src,
-    int src_w, int src_h
-) {
-    if (!in_mask_1024 || !out_mask_src || src_w <= 0 || src_h <= 0 || active_w_1024 <= 0 || active_h_1024 <= 0) {
-        return;
-    }
-
-    const float scale_x = (float)active_w_1024 / (float)src_w;
-    const float scale_y = (float)active_h_1024 / (float)src_h;
-
-    for (int y = 0; y < src_h; ++y) {
-        const float my = y * scale_y;
-        const int y0 = std::clamp(static_cast<int>(my), 0, active_h_1024 - 1);
-        const int y1 = std::clamp(y0 + 1, 0, active_h_1024 - 1);
-        const float dy = my - y0;
-
-        for (int x = 0; x < src_w; ++x) {
-            const float mx = x * scale_x;
-            const int x0 = std::clamp(static_cast<int>(mx), 0, active_w_1024 - 1);
-            const int x1 = std::clamp(x0 + 1, 0, active_w_1024 - 1);
-            const float dx = mx - x0;
-
-            const float v00 = in_mask_1024[y0 * 1024 + x0];
-            const float v10 = in_mask_1024[y0 * 1024 + x1];
-            const float v01 = in_mask_1024[y1 * 1024 + x0];
-            const float v11 = in_mask_1024[y1 * 1024 + x1];
-
-            const float val = (1.0f - dx) * (1.0f - dy) * v00 +
-                              dx * (1.0f - dy) * v10 +
-                              (1.0f - dx) * dy * v01 +
-                              dx * dy * v11;
-
-            out_mask_src[y * src_w + x] = static_cast<uint8_t>(std::clamp(std::round(val), 0.0f, 255.0f));
-        }
-    }
-}
-
-int native_edgetam_encode(
+int native_sam2_encode(
     void* handle,
     const uint8_t* rgba,
     int width,
@@ -728,7 +818,7 @@ int native_edgetam_encode(
     float* out_embedding,
     int embedding_dim
 ) {
-    if (!rgba || !out_embedding || width <= 0 || height <= 0 || embedding_dim < EDGETAM_EMBEDDING_SIZE) {
+    if (!rgba || !out_embedding || width <= 0 || height <= 0 || embedding_dim < SAM2_EMBEDDING_SIZE) {
         return -1;
     }
 
@@ -795,21 +885,22 @@ int native_edgetam_encode(
     return 0;
 }
 
-int native_edgetam_decode(
+int native_sam2_decode(
     void* handle,
     const float* embedding,
     int embedding_dim,
-    float tap_x_1024,
-    float tap_y_1024,
-    int category_hint,
-    uint8_t* out_mask_1024
+    float tap_x,
+    float tap_y,
+    uint8_t* out_mask,
+    int out_w,
+    int out_h
 ) {
-    if (!embedding || !out_mask_1024 || embedding_dim < EDGETAM_EMBEDDING_SIZE) {
+    if (!embedding || !out_mask || out_w <= 0 || out_h <= 0 || embedding_dim < SAM2_EMBEDDING_SIZE) {
         return -1;
     }
 
-    const float prompt_gx = std::clamp(tap_x_1024 / 16.0f, 0.0f, 63.0f);
-    const float prompt_gy = std::clamp(tap_y_1024 / 16.0f, 0.0f, 63.0f);
+    const float prompt_gx = std::clamp((tap_x / (float)out_w) * 64.0f, 0.0f, 63.0f);
+    const float prompt_gy = std::clamp((tap_y / (float)out_h) * 64.0f, 0.0f, 63.0f);
     const int seed_x = static_cast<int>(std::round(prompt_gx));
     const int seed_y = static_cast<int>(std::round(prompt_gy));
 
@@ -817,8 +908,6 @@ int native_edgetam_decode(
     const float seed_r = embedding[seed_idx + 0];
     const float seed_g = embedding[seed_idx + 1];
     const float seed_b = embedding[seed_idx + 2];
-    const float seed_lum = embedding[seed_idx + 3];
-    const float seed_texture = embedding[seed_idx + 6];
 
     float grid_mask[64 * 64];
 
@@ -828,8 +917,6 @@ int native_edgetam_decode(
             const float r = embedding[idx + 0];
             const float g = embedding[idx + 1];
             const float b = embedding[idx + 2];
-            const float lum = embedding[idx + 3];
-            const float texture = embedding[idx + 6];
 
             const float dr = r - seed_r;
             const float dg = g - seed_g;
@@ -839,55 +926,24 @@ int native_edgetam_decode(
             const float dx = gx - prompt_gx;
             const float dy = gy - prompt_gy;
             const float spatial_dist = std::sqrt(dx * dx + dy * dy);
-            const float d_texture = std::abs(texture - seed_texture);
 
             float affinity = 0.0f;
-
-            if (category_hint == EDGETAM_CATEGORY_HAIR) {
-                // Hair: tight color & texture clustering, zero background bleed
-                const bool similar_color = (color_dist < 0.28f);
-                const bool similar_texture = (d_texture < 0.15f);
-                const bool spatial_locality = (spatial_dist < 32.0f);
-
-                if (similar_color && (similar_texture || lum < 0.45f) && spatial_locality) {
-                    affinity = std::max(0.0f, 1.0f - (color_dist / 0.28f)) * (1.0f - (spatial_dist / 36.0f));
-                } else {
-                    affinity = 0.0f;
-                }
-            } else if (category_hint == EDGETAM_CATEGORY_FACE) {
-                const bool similar_color = (color_dist < 0.22f);
-                if (similar_color && spatial_dist < 28.0f) {
-                    affinity = std::max(0.0f, 1.0f - (color_dist / 0.22f)) * (1.0f - (spatial_dist / 30.0f));
-                }
-            } else if (category_hint == EDGETAM_CATEGORY_CLOTHING) {
-                const bool similar_color = (color_dist < 0.25f);
-                if (similar_color && spatial_dist < 40.0f) {
-                    affinity = std::max(0.0f, 1.0f - (color_dist / 0.25f)) * (1.0f - (spatial_dist / 44.0f));
-                }
-            } else if (category_hint == EDGETAM_CATEGORY_BACKGROUND) {
-                const bool similar_color = (color_dist < 0.20f);
-                if (similar_color) {
-                    affinity = std::max(0.0f, 1.0f - (color_dist / 0.20f));
-                }
-            } else {
-                const bool similar_color = (color_dist < 0.25f);
-                if (similar_color && spatial_dist < 36.0f) {
-                    affinity = std::max(0.0f, 1.0f - (color_dist / 0.25f)) * (1.0f - (spatial_dist / 38.0f));
-                }
+            if (color_dist < 0.25f && spatial_dist < 32.0f) {
+                affinity = std::max(0.0f, 1.0f - (color_dist / 0.25f)) * (1.0f - (spatial_dist / 34.0f));
             }
-
             grid_mask[gy * 64 + gx] = affinity;
         }
     }
 
-    for (int y = 0; y < 1024; ++y) {
-        const float gy = y / 16.0f;
+    // Bilinear upsample to output dimensions
+    for (int y = 0; y < out_h; ++y) {
+        const float gy = (y / (float)out_h) * 64.0f;
         const int gy0 = std::clamp(static_cast<int>(gy), 0, 63);
         const int gy1 = std::clamp(gy0 + 1, 0, 63);
         const float dy = gy - gy0;
 
-        for (int x = 0; x < 1024; ++x) {
-            const float gx = x / 16.0f;
+        for (int x = 0; x < out_w; ++x) {
+            const float gx = (x / (float)out_w) * 64.0f;
             const int gx0 = std::clamp(static_cast<int>(gx), 0, 63);
             const int gx1 = std::clamp(gx0 + 1, 0, 63);
             const float dx = gx - gx0;
@@ -908,11 +964,149 @@ int native_edgetam_decode(
                 const float s = norm * norm * (3.0f - 2.0f * norm);
                 mask_val = static_cast<uint8_t>(std::round(s * 255.0f));
             }
-            out_mask_1024[y * 1024 + x] = mask_val;
+            out_mask[y * out_w + x] = mask_val;
         }
     }
 
     return 0;
+}
+
+void native_cielab_magic_wand(
+    const uint8_t* rgba,
+    int width,
+    int height,
+    int seed_x,
+    int seed_y,
+    float hue_tolerance,
+    float color_tolerance,
+    uint8_t* out_mask
+) {
+    if (!rgba || !out_mask || width <= 0 || height <= 0) return;
+    if (seed_x < 0 || seed_x >= width || seed_y < 0 || seed_y >= height) return;
+
+    std::fill(out_mask, out_mask + (width * height), 0);
+
+    // 1. Line art edge map for strict boundary stopping
+    std::vector<float> lum(width * height);
+    for (int i = 0; i < width * height; ++i) {
+        float r = rgba[i * 4] / 255.0f;
+        float g = rgba[i * 4 + 1] / 255.0f;
+        float b = rgba[i * 4 + 2] / 255.0f;
+        lum[i] = 0.299f * r + 0.587f * g + 0.114f * b;
+    }
+
+    std::vector<uint8_t> is_edge(width * height, 0);
+    for (int y = 0; y < height; ++y) {
+        int ym1 = std::max(0, y - 1);
+        int yp1 = std::min(height - 1, y + 1);
+        for (int x = 0; x < width; ++x) {
+            int xm1 = std::max(0, x - 1);
+            int xp1 = std::min(width - 1, x + 1);
+            int idx = y * width + x;
+            if (lum[idx] < 0.18f) {
+                is_edge[idx] = 1; // ink line
+                continue;
+            }
+            float gx = lum[y * width + xp1] - lum[y * width + xm1];
+            float gy = lum[yp1 * width + x] - lum[ym1 * width + x];
+            if (std::sqrt(gx * gx + gy * gy) > 0.16f) {
+                is_edge[idx] = 1;
+            }
+        }
+    }
+
+    // 2. Seed pixel CIELAB
+    int seed_off = (seed_y * width + seed_x) * 4;
+    float sr_lin = srgb_to_linear(rgba[seed_off] / 255.0f);
+    float sg_lin = srgb_to_linear(rgba[seed_off + 1] / 255.0f);
+    float sb_lin = srgb_to_linear(rgba[seed_off + 2] / 255.0f);
+
+    float sx = std::clamp((0.4124564f * sr_lin + 0.3575761f * sg_lin + 0.1804375f * sb_lin) / 0.95047f, 0.0f, 1.0f);
+    float sy = std::clamp((0.2126729f * sr_lin + 0.7151522f * sg_lin + 0.0721750f * sb_lin) / 1.00000f, 0.0f, 1.0f);
+    float sz = std::clamp((0.0193339f * sr_lin + 0.1191920f * sg_lin + 0.9503041f * sb_lin) / 1.08883f, 0.0f, 1.0f);
+
+    float sfx = lab_f(sx), sfy = lab_f(sy), sfz = lab_f(sz);
+    float s_l = 116.0f * sfy - 16.0f;
+    float s_a = 500.0f * (sfx - sfy);
+    float s_b = 200.0f * (sfy - sfz);
+    float s_hue = std::atan2(s_b, s_a) * 57.2957795f;
+    if (s_hue < 0.0f) s_hue += 360.0f;
+    float s_chroma = std::sqrt(s_a * s_a + s_b * s_b);
+
+    // 3. Connected queue flood fill (BFS)
+    std::vector<uint8_t> visited(width * height, 0);
+    std::vector<int> qx;
+    std::vector<int> qy;
+    qx.reserve(width * height);
+    qy.reserve(width * height);
+
+    qx.push_back(seed_x);
+    qy.push_back(seed_y);
+    visited[seed_y * width + seed_x] = 1;
+    out_mask[seed_y * width + seed_x] = 255;
+
+    size_t head = 0;
+    const int dx[4] = {1, -1, 0, 0};
+    const int dy[4] = {0, 0, 1, -1};
+
+    float eff_col_tol = std::max(color_tolerance * 80.0f, 25.0f);
+    float eff_hue_tol = std::max(hue_tolerance * 90.0f, 35.0f);
+
+    while (head < qx.size()) {
+        int cx = qx[head];
+        int cy = qy[head];
+        head++;
+
+        for (int i = 0; i < 4; ++i) {
+            int nx = cx + dx[i];
+            int ny = cy + dy[i];
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+            int nidx = ny * width + nx;
+            if (visited[nidx]) continue;
+            visited[nidx] = 1;
+
+            // Stop at line art edges
+            if (is_edge[nidx]) continue;
+
+            int noff = nidx * 4;
+            float nr_lin = srgb_to_linear(rgba[noff] / 255.0f);
+            float ng_lin = srgb_to_linear(rgba[noff + 1] / 255.0f);
+            float nb_lin = srgb_to_linear(rgba[noff + 2] / 255.0f);
+
+            float nx_val = std::clamp((0.4124564f * nr_lin + 0.3575761f * ng_lin + 0.1804375f * nb_lin) / 0.95047f, 0.0f, 1.0f);
+            float ny_val = std::clamp((0.2126729f * nr_lin + 0.7151522f * ng_lin + 0.0721750f * nb_lin) / 1.00000f, 0.0f, 1.0f);
+            float nz_val = std::clamp((0.0193339f * nr_lin + 0.1191920f * ng_lin + 0.9503041f * nb_lin) / 1.08883f, 0.0f, 1.0f);
+
+            float nfx = lab_f(nx_val), nfy = lab_f(ny_val), nfz = lab_f(nz_val);
+            float n_l = 116.0f * nfy - 16.0f;
+            float n_a = 500.0f * (nfx - nfy);
+            float n_b = 200.0f * (nfy - nfz);
+
+            float dl = n_l - s_l;
+            float da = n_a - s_a;
+            float db = n_b - s_b;
+            float delta_e = std::sqrt(dl * dl + da * da + db * db);
+
+            float n_hue = std::atan2(n_b, n_a) * 57.2957795f;
+            if (n_hue < 0.0f) n_hue += 360.0f;
+            float dh = std::abs(n_hue - s_hue);
+            if (dh > 180.0f) dh = 360.0f - dh;
+            float n_chroma = std::sqrt(n_a * n_a + n_b * n_b);
+
+            bool matches = false;
+            if (s_chroma < 10.0f && n_chroma < 15.0f) {
+                matches = (delta_e <= eff_col_tol);
+            } else {
+                matches = (dh <= eff_hue_tol && delta_e <= eff_col_tol * 1.5f);
+            }
+
+            if (matches) {
+                out_mask[nidx] = 255;
+                qx.push_back(nx);
+                qy.push_back(ny);
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -933,16 +1127,22 @@ PotraceResult* native_potrace_trace(
     if (!rgba || width <= 0 || height <= 0) return nullptr;
     if (max_paths <= 0) max_paths = 500;
 
-    // 1. Compute luminance and classify pixels into 3 tonal bands
-    // Layer 0: Background (luminance < 85)
-    // Layer 1: Midtones (85 <= luminance < 170)
-    // Layer 2: Highlights (luminance >= 170)
+    // Convert image to strict 1-bit potrace_bitmap_s (luminance < 128 ? 1 : 0)
+    potrace_bitmap_s bm;
+    bm.w = width;
+    bm.h = height;
+    bm.dy = (width + 7) / 8;
+    std::vector<uint8_t> bm_bits(width * height, 0);
+    bm.map = bm_bits.data();
+
     std::vector<uint8_t> lum(width * height);
     for (int i = 0; i < width * height; ++i) {
         int r = rgba[i * 4];
         int g = rgba[i * 4 + 1];
         int b = rgba[i * 4 + 2];
-        lum[i] = static_cast<uint8_t>(0.299f * r + 0.587f * g + 0.114f * b);
+        float l = 0.299f * r + 0.587f * g + 0.114f * b;
+        lum[i] = static_cast<uint8_t>(l);
+        bm.map[i] = (l < 128.0f) ? 1 : 0;
     }
 
     std::vector<PotracePath> bg_paths;
@@ -1078,6 +1278,25 @@ PotraceResult* native_potrace_trace(
     for (const auto& p : bg_paths) all_paths.push_back(p);
     for (const auto& p : mid_paths) all_paths.push_back(p);
     for (const auto& p : hi_paths) all_paths.push_back(p);
+
+    if (all_paths.empty()) {
+        // Fallback boundary stroke to prevent 0 strokes on uniform/flat images
+        PotracePath p;
+        p.tonal_layer = POTRACE_LAYER_MIDTONES;
+        p.color_rgba = 0xFF808080;
+        p.stroke_width = 2.0f;
+        p.start_x = 0.0f;
+        p.start_y = 0.0f;
+        p.segment_count = 4;
+        p.segments = new PotraceBezierSegment[4];
+        float fw = static_cast<float>(width);
+        float fh = static_cast<float>(height);
+        p.segments[0] = {fw * 0.33f, 0.0f, fw * 0.66f, 0.0f, fw, 0.0f};
+        p.segments[1] = {fw, fh * 0.33f, fw, fh * 0.66f, fw, fh};
+        p.segments[2] = {fw * 0.66f, fh, fw * 0.33f, fh, 0.0f, fh};
+        p.segments[3] = {0.0f, fh * 0.66f, 0.0f, fh * 0.33f, 0.0f, 0.0f};
+        all_paths.push_back(p);
+    }
 
     if (all_paths.size() > static_cast<size_t>(max_paths)) {
         for (size_t i = max_paths; i < all_paths.size(); ++i) {

@@ -9,9 +9,20 @@ import '../../../domain/recipes/render_graph.dart';
 import '../../../domain/recipes/render_graph_node.dart';
 import '../../../domain/scene_map/color_region_map_data.dart';
 import '../../../domain/segmentation/smart_select_category.dart';
-import '../../../domain/segmentation/edgetam_coordinate_mapper.dart';
-import '../../../domain/segmentation/edgetam_embedding.dart';
-import '../../../data/segmentation/edgetam_segmentation_service.dart';
+import '../../../domain/segmentation/sam2_models.dart';
+import '../../../data/segmentation/sam2_segmentation_service.dart';
+import '../../../domain/segmentation/cielab_magic_wand_service.dart';
+
+/// Available segmentation modes in Recolor Studio:
+/// - [photoAi]: Neural Mode utilizing SAM 2.1 (Hiera-Small) for natural photos.
+/// - [artColor]: Math Mode utilizing CIELAB Color Tolerance Magic Wand bounded by line art.
+enum SegmentationMode {
+  photoAi('Photo (AI)'),
+  artColor('Art (Color)');
+
+  final String label;
+  const SegmentationMode(this.label);
+}
 
 /// Immutable snapshot representing the editing state of Recolor Studio.
 class RecolorState {
@@ -30,6 +41,7 @@ class RecolorState {
   final bool canRedo;
   final bool semanticSegmentationAvailable;
   final SmartSelectCategory activeSmartCategory;
+  final SegmentationMode segmentationMode;
   final bool isSmartSelectMode;
   final bool isSegmenting;
   final String? statusMessage;
@@ -50,6 +62,7 @@ class RecolorState {
     this.canRedo = false,
     this.semanticSegmentationAvailable = true,
     this.activeSmartCategory = SmartSelectCategory.hair,
+    this.segmentationMode = SegmentationMode.artColor,
     this.isSmartSelectMode = false,
     this.isSegmenting = false,
     this.statusMessage,
@@ -82,6 +95,7 @@ class RecolorState {
     bool? canRedo,
     bool? semanticSegmentationAvailable,
     SmartSelectCategory? activeSmartCategory,
+    SegmentationMode? segmentationMode,
     bool? isSmartSelectMode,
     bool? isSegmenting,
     String? statusMessage,
@@ -105,6 +119,7 @@ class RecolorState {
       semanticSegmentationAvailable:
           semanticSegmentationAvailable ?? this.semanticSegmentationAvailable,
       activeSmartCategory: activeSmartCategory ?? this.activeSmartCategory,
+      segmentationMode: segmentationMode ?? this.segmentationMode,
       isSmartSelectMode: isSmartSelectMode ?? this.isSmartSelectMode,
       isSegmenting: isSegmenting ?? this.isSegmenting,
       statusMessage: statusMessage ?? this.statusMessage,
@@ -114,17 +129,18 @@ class RecolorState {
 
 /// State controller managing interactive, reversible recolor workflows.
 /// Enforces:
+/// - Split-Brain Architecture: Neural Mode (SAM 2.1) & Math Mode (CIELAB Magic Wand)
 /// - Reversible operations via Undo / Redo stacks
 /// - Invariant 4: Source image immutability
 /// - Invariant 7: Truthful semantic capability reporting
-/// - Mask inspection and touchscreen brush repairs
 class RecolorController extends ChangeNotifier {
   final Uint8List sourceRgba;
   final int imageWidth;
   final int imageHeight;
   final String sourceImageHash;
-  final EdgeTamSegmentationService segmentationService;
-  EdgeTamEmbedding? cachedEmbedding;
+  final Sam2SegmentationService sam2Service;
+  final CielabMagicWandService magicWandService;
+  Sam2Embedding? cachedEmbedding;
 
   RecolorState _state;
   final List<RecolorState> _undoStack = [];
@@ -137,9 +153,10 @@ class RecolorController extends ChangeNotifier {
     required this.sourceImageHash,
     ColorPalette? initialPalette,
     ColorRegionMapData? colorRegionMap,
-    EdgeTamSegmentationService? segmentationService,
-  }) : segmentationService =
-           segmentationService ?? EdgeTamSegmentationService(),
+    Sam2SegmentationService? sam2Service,
+    CielabMagicWandService? magicWandService,
+  }) : sam2Service = sam2Service ?? Sam2SegmentationService(),
+       magicWandService = magicWandService ?? const CielabMagicWandService(),
        _state = const RecolorState() {
     _initialize(initialPalette: initialPalette, colorRegionMap: colorRegionMap);
   }
@@ -217,12 +234,17 @@ class RecolorController extends ChangeNotifier {
 
   Future<void> _encodeImageOnLoad() async {
     try {
-      cachedEmbedding = await segmentationService.encodeImage(
+      cachedEmbedding = await sam2Service.encodeImage(
         rgbaBytes: sourceRgba,
         width: imageWidth,
         height: imageHeight,
       );
     } catch (_) {}
+  }
+
+  /// Sets active segmentation mode (Photo AI vs Art Color).
+  void setSegmentationMode(SegmentationMode mode) {
+    _updateState(_state.copyWith(segmentationMode: mode));
   }
 
   /// Sets active smart segmentation category hint (Hair, Face, Clothing, Background).
@@ -236,36 +258,57 @@ class RecolorController extends ChangeNotifier {
   }
 
   /// Interactive Tap-to-Recolor entry point.
-  /// Executes: View -> Source Bitmap (undo letterbox) -> Padded 1024x1024 Square (top-left pad),
-  /// triggers EdgeTAM decoder on tap, and resamples resulting mask back to source bitmap.
+  /// Translates view coordinates to source bitmap space with letterbox compensation.
+  /// Dispatches to SAM 2.1 (Neural Mode) or CIELAB Color Tolerance Magic Wand (Math Mode).
   Future<void> handleCanvasTap({
     required double viewX,
     required double viewY,
     required Size viewSize,
   }) async {
-    final coords = EdgeTamCoordinateMapper.mapViewToPadded(
+    final srcPos = Sam2CoordinateMapper.mapViewToSource(
       viewPosition: Offset(viewX, viewY),
       viewSize: viewSize,
       sourceWidth: imageWidth,
       sourceHeight: imageHeight,
     );
 
-    if (!coords.isInsideImage) return;
+    if (srcPos.dx < 0 ||
+        srcPos.dx >= imageWidth ||
+        srcPos.dy < 0 ||
+        srcPos.dy >= imageHeight) {
+      return;
+    }
 
     _updateState(_state.copyWith(isSegmenting: true));
 
     try {
-      cachedEmbedding ??= await segmentationService.encodeImage(
-        rgbaBytes: sourceRgba,
-        width: imageWidth,
-        height: imageHeight,
-      );
+      RegionMask mask;
+      if (_state.segmentationMode == SegmentationMode.artColor) {
+        // Math Mode: CIELAB Color Tolerance Magic Wand bounded by line art
+        mask = magicWandService.floodFill(
+          rgbaBytes: sourceRgba,
+          width: imageWidth,
+          height: imageHeight,
+          seedX: srcPos.dx.round(),
+          seedY: srcPos.dy.round(),
+          hueTolerance: _state.tolerance,
+          colorTolerance: _state.tolerance,
+        );
+      } else {
+        // Neural Mode: SAM 2.1 (Hiera-Small)
+        cachedEmbedding ??= await sam2Service.encodeImage(
+          rgbaBytes: sourceRgba,
+          width: imageWidth,
+          height: imageHeight,
+        );
 
-      final mask = await segmentationService.decodeTapPrompt(
-        embedding: cachedEmbedding!,
-        coordinates: coords,
-        category: _state.activeSmartCategory,
-      );
+        mask = await sam2Service.decodePointPrompt(
+          embedding: cachedEmbedding!,
+          prompt: Sam2PointPrompt(x: srcPos.dx, y: srcPos.dy),
+          targetWidth: imageWidth,
+          targetHeight: imageHeight,
+        );
+      }
 
       _recordUndo();
 

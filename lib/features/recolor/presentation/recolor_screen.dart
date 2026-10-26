@@ -11,7 +11,6 @@ import '../../../core/theme/spacing_tokens.dart';
 import '../../../domain/color/color_palette.dart';
 import '../../../domain/layers/editor_layer.dart';
 import '../../../domain/layers/history_command.dart';
-import '../../../domain/segmentation/smart_select_category.dart';
 import '../../editor/presentation/editor_providers.dart';
 import 'recolor_controller.dart';
 
@@ -485,7 +484,7 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
                                   ),
                                 ),
                               ),
-                            // Floating Smart Select pills over canvas
+                            // Floating Smart Select pills over canvas (Split-Brain: Photo AI vs Art Color)
                             Positioned(
                               bottom: 12,
                               child: Container(
@@ -507,15 +506,9 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
                                       color: Colors.white70,
                                     ),
                                     const SizedBox(width: 4),
-                                    ...[
-                                      SmartSelectCategory.hair,
-                                      SmartSelectCategory.face,
-                                      SmartSelectCategory.clothing,
-                                      SmartSelectCategory.background,
-                                    ].map((cat) {
+                                    ...SegmentationMode.values.map((mode) {
                                       final isSelected =
-                                          ctrl?.state.activeSmartCategory ==
-                                          cat;
+                                          ctrl?.state.segmentationMode == mode;
                                       return Padding(
                                         padding: const EdgeInsets.symmetric(
                                           horizontal: 3,
@@ -523,7 +516,7 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
                                         child: Listener(
                                           behavior: HitTestBehavior.opaque,
                                           onPointerUp: (_) {
-                                            ctrl?.setSmartSelectCategory(cat);
+                                            ctrl?.setSegmentationMode(mode);
                                           },
                                           child: Container(
                                             padding: const EdgeInsets.symmetric(
@@ -540,7 +533,7 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
                                                   BorderRadius.circular(12),
                                             ),
                                             child: Text(
-                                              cat.label,
+                                              mode.label,
                                               style: TextStyle(
                                                 color: isSelected
                                                     ? Colors.white

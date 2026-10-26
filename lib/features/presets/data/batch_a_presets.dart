@@ -29,9 +29,9 @@ class BatchAPresets {
       PresetParameter(
         id: 'grainIntensity',
         label: 'Paper Tooth',
-        min: 0.0,
-        max: 0.35,
-        defaultValue: 0.15,
+        min: 0.02,
+        max: 0.10,
+        defaultValue: 0.05,
         step: 0.01,
       ),
     ],
@@ -40,7 +40,7 @@ class BatchAPresets {
     accessibleLabel: 'Graphite Pencil artistic sketch style preset',
     buildGraph: (sourceHash, sourceWidth, sourceHeight, params) {
       final hardness = params['pencilHardness'] ?? 0.65;
-      final grain = params['grainIntensity'] ?? 0.15;
+      final grain = params['grainIntensity'] ?? 0.05;
 
       return RenderGraph(
         id: 'graph_graphite_pencil',

@@ -496,39 +496,41 @@ class EditorScreen extends ConsumerWidget {
                         fontFamily: 'monospace',
                       ),
                     ),
-                    const SizedBox(width: AppSpacingTokens.xs),
-                    // Fine-Tune Opt-in Trigger Button
-                    Semantics(
-                      button: true,
-                      label:
-                          'Open fine-tune controls for ${primaryParam.label}',
-                      child: OutlinedButton.icon(
-                        icon: const Icon(Icons.tune, size: 14),
-                        label: Text(
-                          'Fine-Tune',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            fontSize: 12,
+                    if (activePreset?.isLockedStudioPreset != true) ...[
+                      const SizedBox(width: AppSpacingTokens.xs),
+                      // Fine-Tune Opt-in Trigger Button
+                      Semantics(
+                        button: true,
+                        label:
+                            'Open fine-tune controls for ${primaryParam.label}',
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.tune, size: 14),
+                          label: Text(
+                            'Fine-Tune',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              fontSize: 12,
+                            ),
                           ),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 2,
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
                           ),
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        onPressed: () => FineTuneSheet.show(
-                          context,
-                          controller: controller,
-                          onOpenProTools: () => ProToolsSheet.show(
+                          onPressed: () => FineTuneSheet.show(
                             context,
                             controller: controller,
+                            onOpenProTools: () => ProToolsSheet.show(
+                              context,
+                              controller: controller,
+                            ),
                           ),
                         ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
                 Semantics(

@@ -13,6 +13,7 @@ import 'package:reranger/features/autodraw/data/potrace_vectorizer.dart';
 import 'package:reranger/features/autodraw/data/video_timelapse_recorder.dart';
 import 'package:reranger/features/autodraw/domain/autodraw_models.dart';
 import 'package:reranger/features/autodraw/presentation/autodraw_screen.dart';
+import 'package:reranger/features/presets/data/studio_presets.dart';
 
 void main() {
   group('PROMPT 4: Autodraw Engine & Hardware Video Export Suite', () {
@@ -480,6 +481,83 @@ void main() {
               'Stroke must be vibrant Red (red - green > 100), not dull Grey',
         );
       }
+    });
+
+    test('10. Masterpiece Integration: Apply "Cinematic Teal & Orange" preset to a grey image. Run Autodraw. Assert resulting strokes are Teal and Orange.', () async {
+      // 1. Create a dull neutral grey image (zero saturation: R=G=B)
+      const w = 64, h = 64;
+      final greyImage = img.Image(width: w, height: h, numChannels: 4);
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          // Dark grey on left (shadows), bright grey on right (highlights)
+          final l = x < 32 ? 30 : 225;
+          greyImage.setPixelRgba(x, y, l, l, l, 255);
+        }
+      }
+      final greyBytes = Uint8List.fromList(img.encodePng(greyImage));
+      final greyHash = sha256.convert(greyBytes).toString();
+
+      // 2. Build graph using hyper-premium "Cinematic Teal & Orange" Studio preset
+      final renderGraph = StudioPresets.cinematicTealOrange.buildGraph(
+        greyHash,
+        w,
+        h,
+        {'studioStrength': 1.0},
+      );
+
+      // 3. Run Autodraw pipeline on processed shader buffer
+      final pipeline = AutodrawPipeline();
+      final result = await pipeline.processAndVectorize(
+        sourceImageBytes: greyBytes,
+        renderGraph: renderGraph,
+        maxPaths: 60,
+      );
+
+      expect(result.strokes, isNotEmpty);
+
+      bool foundTeal = false;
+      bool foundOrange = false;
+
+      for (final stroke in result.strokes) {
+        final c = stroke.strokeColor;
+        final r255 = (c.r * 255.0).round().clamp(0, 255);
+        final g255 = (c.g * 255.0).round().clamp(0, 255);
+        final b255 = (c.b * 255.0).round().clamp(0, 255);
+
+        // Strict proof: stroke is NOT neutral grey (R != G or G != B)
+        expect(
+          (r255 == g255 && g255 == b255),
+          isFalse,
+          reason: 'Stroke must NOT be dull grey: RGB($r255, $g255, $b255)',
+        );
+
+        if (stroke.layer == AutodrawTonalLayer.background) {
+          // Teal shadow: Blue and Green dominant over Red
+          if (b255 > r255 && g255 >= r255) {
+            foundTeal = true;
+          }
+        }
+
+        if (stroke.layer == AutodrawTonalLayer.highlights) {
+          // Orange highlight: Red dominant, rich warm tone (R > B and R > G)
+          if (r255 > b255 && r255 > g255 && r255 > 150) {
+            foundOrange = true;
+          }
+        }
+      }
+
+      expect(
+        foundTeal,
+        isTrue,
+        reason:
+            'Autodraw background strokes must have rich Cinematic Teal color',
+      );
+      expect(
+        foundOrange,
+        isTrue,
+        reason:
+            'Autodraw highlight strokes must have rich Cinematic Orange color',
+      );
     });
   });
 }

@@ -1,7 +1,10 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../domain/recipes/render_graph.dart';
 import '../../features/autodraw/presentation/autodraw_screen.dart';
 import '../../features/creations/presentation/creations_screen.dart';
 import '../../features/editor/presentation/editor_screen.dart';
@@ -95,6 +98,17 @@ final GoRouter appRouter = GoRouter(
       path: AppRouteNames.autodraw,
       builder: (context, state) {
         final id = state.pathParameters['id'] ?? 'unknown';
+        final extra = state.extra;
+        if (extra is Map<String, dynamic>) {
+          return AutodrawScreen(
+            projectId: id,
+            sourceImageBytes: extra['sourceImageBytes'] as Uint8List?,
+            processedImageBytes: extra['processedImageBytes'] as Uint8List?,
+            renderGraph: extra['renderGraph'] as RenderGraph?,
+          );
+        } else if (extra is Uint8List) {
+          return AutodrawScreen(projectId: id, processedImageBytes: extra);
+        }
         return AutodrawScreen(projectId: id);
       },
     ),

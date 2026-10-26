@@ -13,8 +13,20 @@ void native_to_grayscale(const uint8_t* src, uint8_t* dst, int width, int height
 /// Computes 3x3 Sobel gradient edge map from RGBA8888 buffer.
 void native_sobel_edges(const uint8_t* src, uint8_t* dst, int width, int height);
 
-/// Applies procedural grain overlay using a 32-bit linear congruential generator.
+/// Applies procedural grain overlay using 2D coherent noise and SoftLight blending.
 void native_grain_overlay(const uint8_t* src, uint8_t* dst, int width, int height, uint32_t seed, float intensity);
+
+/// Executes translucent watercolor wash diffusion with row-major memory stride and coherent paper grain.
+void native_watercolor_wash(
+    const uint8_t* src,
+    uint8_t* dst,
+    int width,
+    int height,
+    int wash_diffusion,
+    float wet_edge_bleed,
+    float paper_tooth,
+    uint32_t seed
+);
 
 /// Executes Recipe 1: Dramatic Monochrome Ink in native C++.
 void native_recipe_monochrome_ink(const uint8_t* src, uint8_t* dst, int width, int height);
@@ -79,32 +91,23 @@ void native_adaptive_vibrancy(
 );
 
 // ============================================================================
-// EdgeTAM Zero-Shot Semantic Segmentation (ExecuTorch / LiteRT Mobile Runtime)
+// SAM 2.1 (Hiera-Small) Neural Segmentation & CIELAB Math Mode Magic Wand
 // ============================================================================
 
-enum EdgeTamCategoryHint {
-    EDGETAM_CATEGORY_GENERAL = 0,
-    EDGETAM_CATEGORY_HAIR = 1,
-    EDGETAM_CATEGORY_FACE = 2,
-    EDGETAM_CATEGORY_CLOTHING = 3,
-    EDGETAM_CATEGORY_BACKGROUND = 4
-};
+#define SAM2_GRID_SIZE 64
+#define SAM2_CHANNELS 64
+#define SAM2_EMBEDDING_SIZE (SAM2_GRID_SIZE * SAM2_GRID_SIZE * SAM2_CHANNELS)
+#define SAM2_MODEL_INPUT_DIM 1024
 
-#define EDGETAM_GRID_SIZE 64
-#define EDGETAM_CHANNELS 64
-#define EDGETAM_EMBEDDING_SIZE (EDGETAM_GRID_SIZE * EDGETAM_GRID_SIZE * EDGETAM_CHANNELS)
-#define EDGETAM_MODEL_INPUT_DIM 1024
+/// Initializes SAM 2.1 Hiera-Small session with model path. Returns opaque handle.
+void* native_sam2_create(const char* model_path);
 
-/// Initializes EdgeTAM session with model path. Returns opaque handle.
-void* native_edgetam_create(const char* model_path);
-
-/// Destroys EdgeTAM session and releases working tensors.
-void native_edgetam_destroy(void* handle);
+/// Destroys SAM 2.1 session and releases working tensors.
+void native_sam2_destroy(void* handle);
 
 /// Stage 1: Image Encoder (runs on image load).
-/// Preprocesses RGBA image to 1024x1024 top-left pad, extracts multi-scale vision transformer
-/// embeddings into out_embedding (must be at least EDGETAM_EMBEDDING_SIZE floats).
-int native_edgetam_encode(
+/// Extracts hierarchical vision transformer embeddings into out_embedding.
+int native_sam2_encode(
     void* handle,
     const uint8_t* rgba,
     int width,
@@ -114,43 +117,41 @@ int native_edgetam_encode(
 );
 
 /// Stage 2: Prompt-Guided Mask Decoder (runs per tap).
-/// Evaluates tap prompt coordinate in 1024x1024 padded space with category hint.
-/// Writes 1024x1024 single-channel uint8 mask (1,048,576 bytes).
-int native_edgetam_decode(
+/// Evaluates tap point prompt to generate high-precision object mask.
+int native_sam2_decode(
     void* handle,
     const float* embedding,
     int embedding_dim,
-    float tap_x_1024,
-    float tap_y_1024,
-    int category_hint,
-    uint8_t* out_mask_1024
+    float tap_x,
+    float tap_y,
+    uint8_t* out_mask,
+    int out_w,
+    int out_h
 );
 
-/// Coordinate Mapper:
-/// Maps View tap coordinate (view_x, view_y) on (view_w, view_h) with BoxFit.contain
-/// to Source Bitmap space (out_src_x, out_src_y), and then into Padded 1024x1024 space (out_pad_x, out_pad_y).
-/// Also returns active padded bounds (active_w_1024, active_h_1024).
-void native_edgetam_map_view_to_padded(
-    float view_x, float view_y,
-    float view_w, float view_h,
-    int src_w, int src_h,
-    float* out_src_x, float* out_src_y,
-    float* out_pad_x, float* out_pad_y,
-    int* out_active_w_1024, int* out_active_h_1024
-);
-
-/// Reverse Coordinate Mapper:
-/// Resamples 1024x1024 top-left padded mask back to Source Bitmap dimensions (src_w x src_h).
-void native_edgetam_resample_mask_to_source(
-    const uint8_t* in_mask_1024,
-    int active_w_1024, int active_h_1024,
-    uint8_t* out_mask_src,
-    int src_w, int src_h
+/// Math Mode: CIELAB Color Tolerance Magic Wand for Art/Anime
+/// Selects all connected pixels starting from (seed_x, seed_y) within hue/color tolerance,
+/// strictly bounded by line art edges.
+void native_cielab_magic_wand(
+    const uint8_t* rgba,
+    int width,
+    int height,
+    int seed_x,
+    int seed_y,
+    float hue_tolerance,
+    float color_tolerance,
+    uint8_t* out_mask
 );
 
 // ============================================================================
 // Autodraw Engine (Potrace Vectorization: Background -> Midtones -> Highlights)
 // ============================================================================
+
+struct potrace_bitmap_s {
+    int w, h;
+    int dy;
+    uint8_t* map; // Strict 1-bit per pixel representation (luminance < 128 ? 1 : 0)
+};
 
 enum PotraceTonalLayer {
     POTRACE_LAYER_BACKGROUND = 0,

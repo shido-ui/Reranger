@@ -44,17 +44,24 @@ class ExportConfiguration {
   final List<int>
   backgroundColorForOpaque; // RGB [r, g, b] default [255, 255, 255]
 
+  final double realism; // 0.0 to 1.0 Robust Stealth Engine V2
+
   const ExportConfiguration({
     this.format = ExportImageFormat.png,
     this.quality = 90,
     this.scale = 1.0,
     this.stripGpsMetadata = true,
     this.backgroundColorForOpaque = const [255, 255, 255],
+    this.realism = 0.0,
   }) : assert(
          quality >= 1 && quality <= 100,
          'Quality must be between 1 and 100',
        ),
-       assert(scale > 0.0 && scale <= 4.0, 'Scale must be between 0.0 and 4.0');
+       assert(scale > 0.0 && scale <= 4.0, 'Scale must be between 0.0 and 4.0'),
+       assert(
+         realism >= 0.0 && realism <= 1.0,
+         'Realism must be between 0.0 and 1.0',
+       );
 
   ExportConfiguration copyWith({
     ExportImageFormat? format,
@@ -62,6 +69,7 @@ class ExportConfiguration {
     double? scale,
     bool? stripGpsMetadata,
     List<int>? backgroundColorForOpaque,
+    double? realism,
   }) {
     return ExportConfiguration(
       format: format ?? this.format,
@@ -70,6 +78,7 @@ class ExportConfiguration {
       stripGpsMetadata: stripGpsMetadata ?? this.stripGpsMetadata,
       backgroundColorForOpaque:
           backgroundColorForOpaque ?? this.backgroundColorForOpaque,
+      realism: realism ?? this.realism,
     );
   }
 }

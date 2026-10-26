@@ -55,6 +55,12 @@ class PresetDefinition {
     return result;
   }
 
+  /// Whether this preset is a locked hyper-premium studio preset
+  /// that only exposes a single Studio Strength slider.
+  bool get isLockedStudioPreset =>
+      id.startsWith('studio_') ||
+      (parameters.length == 1 && parameters.first.id == 'studioStrength');
+
   /// Exports parameter metadata to JSON schema.
   Map<String, dynamic> toJson() => {
     'id': id,

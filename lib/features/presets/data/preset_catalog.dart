@@ -3,6 +3,7 @@ import 'batch_a_presets.dart';
 import 'batch_b_presets.dart';
 import 'batch_c_presets.dart';
 import 'expanded_presets.dart';
+import 'studio_presets.dart';
 
 /// Central canonical registry for Reranger's artistic style presets.
 /// Provides safe lookup, category filtering, and access to all 48 validated presets.
@@ -72,8 +73,18 @@ class PresetCatalog {
     ExpandedPresets.infraredFilm,
   ]);
 
+  /// Original pure pass-through preset (ID: original).
+  static PresetDefinition get original => StudioPresets.original;
+
+  /// 5 Hyper-premium locked Studio Presets.
+  static List<PresetDefinition> get studioPresets =>
+      StudioPresets.allStudioPresets;
+
   static final Map<String, PresetDefinition> _byId = {
     for (final p in all) p.id: p,
+    'original': StudioPresets.original,
+    for (final p in StudioPresets.allStudioPresets) p.id: p,
+    'cinematic_teal_orange_pro': StudioPresets.cinematicTealOrange,
     // Backward-compatible alias lookups:
     'flat_illustration': BatchBPresets.flatVector,
     'vintage_film': BatchBPresets.vintage35mm,

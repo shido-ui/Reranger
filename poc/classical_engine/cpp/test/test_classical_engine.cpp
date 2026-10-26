@@ -154,141 +154,98 @@ void test_adaptive_vibrancy() {
     std::cout << "[PASS] test_adaptive_vibrancy passed." << std::endl;
 }
 
-void test_edgetam_hair_segmentation_no_bleed() {
-    std::cout << "[RUN] test_edgetam_hair_segmentation_no_bleed..." << std::endl;
+void test_sam2_and_cielab_magic_wand() {
+    std::cout << "[RUN] test_sam2_and_cielab_magic_wand..." << std::endl;
 
     const int w = 128, h = 128;
     std::vector<uint8_t> portrait_rgba(w * h * 4, 0);
 
-    // Build synthetic portrait scene:
-    // Background: light wall (245, 250, 255)
-    // Hair: top head region (35, 25, 20) with fine texture variance
-    // Face: skin (230, 180, 150)
-    // Clothes: blue shirt (20, 80, 200)
+    // Build synthetic anime/portrait scene with dark line art boundary:
+    // Hair: top head region (220, 80, 120) with fine hair lines
+    // Ink line: 1-pixel boundary (15, 15, 15)
+    // Face: skin (255, 220, 200)
+    // Background: light (255, 255, 255)
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
             const int off = (y * w + x) * 4;
-            if (y >= 12 && y <= 45 && x >= 32 && x <= 96) {
-                // Hair region: dark brown/black with subtle strand texture
-                uint8_t noise = static_cast<uint8_t>((((x * 17 + y * 31) ^ 0x4f) % 15));
-                portrait_rgba[off]     = 35 + noise;
-                portrait_rgba[off + 1] = 25 + noise;
-                portrait_rgba[off + 2] = 20 + noise;
-                portrait_rgba[off + 3] = 255;
-            } else if (y >= 46 && y <= 92 && x >= 36 && x <= 92) {
-                // Face skin
-                portrait_rgba[off]     = 230;
-                portrait_rgba[off + 1] = 180;
-                portrait_rgba[off + 2] = 150;
-                portrait_rgba[off + 3] = 255;
-            } else if (y >= 93 && x >= 24 && x <= 104) {
-                // Clothing
-                portrait_rgba[off]     = 20;
+            if (y >= 15 && y <= 45 && x >= 32 && x <= 96) {
+                // Hair region: vibrant magenta anime hair
+                portrait_rgba[off]     = 220;
                 portrait_rgba[off + 1] = 80;
+                portrait_rgba[off + 2] = 120;
+                portrait_rgba[off + 3] = 255;
+            } else if ((y == 46 || y == 14 || x == 31 || x == 97) && (y >= 14 && y <= 46 && x >= 31 && x <= 97)) {
+                // Ink outline (line art)
+                portrait_rgba[off]     = 10;
+                portrait_rgba[off + 1] = 10;
+                portrait_rgba[off + 2] = 10;
+                portrait_rgba[off + 3] = 255;
+            } else if (y >= 47 && y <= 92 && x >= 32 && x <= 96) {
+                // Face skin
+                portrait_rgba[off]     = 255;
+                portrait_rgba[off + 1] = 220;
                 portrait_rgba[off + 2] = 200;
                 portrait_rgba[off + 3] = 255;
             } else {
                 // Background
-                portrait_rgba[off]     = 245;
-                portrait_rgba[off + 1] = 250;
+                portrait_rgba[off]     = 255;
+                portrait_rgba[off + 1] = 255;
                 portrait_rgba[off + 2] = 255;
                 portrait_rgba[off + 3] = 255;
             }
         }
     }
 
-    // 1. Test Coordinate Mapper View -> Padded 1024x1024
-    float view_w = 360.0f, view_h = 640.0f;
-    // Tap on hair at x=64, y=28 in image space
-    float tap_src_x = 64.0f, tap_src_y = 28.0f;
-    float scale = std::min(view_w / w, view_h / h); // 360 / 128 = 2.8125
-    float offset_x = (view_w - w * scale) * 0.5f; // 0.0
-    float offset_y = (view_h - h * scale) * 0.5f; // (640 - 360) / 2 = 140.0
-    float tap_view_x = offset_x + tap_src_x * scale;
-    float tap_view_y = offset_y + tap_src_y * scale;
-
-    float out_src_x = 0, out_src_y = 0, out_pad_x = 0, out_pad_y = 0;
-    int active_w = 0, active_h = 0;
-    native_edgetam_map_view_to_padded(
-        tap_view_x, tap_view_y, view_w, view_h,
-        w, h,
-        &out_src_x, &out_src_y,
-        &out_pad_x, &out_pad_y,
-        &active_w, &active_h
-    );
-
-    assert(std::abs(out_src_x - tap_src_x) < 1.0f);
-    assert(std::abs(out_src_y - tap_src_y) < 1.0f);
-    assert(active_w == 1024 && active_h == 1024); // Square image scaled to 1024x1024
-
-    // 2. Test EdgeTAM Create
-    void* handle = native_edgetam_create("assets/models/edgetam.pte");
+    // 1. Test SAM 2.1 Neural Pipeline
+    void* handle = native_sam2_create("assets/models/sam2_hiera_small.pte");
     assert(handle != nullptr);
 
-    // 3. Test EdgeTAM Encoder (runs once on image load)
-    std::vector<float> embedding(EDGETAM_EMBEDDING_SIZE, 0.0f);
-    auto start_enc = std::chrono::high_resolution_clock::now();
-    int enc_res = native_edgetam_encode(handle, portrait_rgba.data(), w, h, embedding.data(), EDGETAM_EMBEDDING_SIZE);
-    auto end_enc = std::chrono::high_resolution_clock::now();
-    double enc_ms = std::chrono::duration<double, std::milli>(end_enc - start_enc).count();
-
+    std::vector<float> embedding(SAM2_EMBEDDING_SIZE, 0.0f);
+    int enc_res = native_sam2_encode(handle, portrait_rgba.data(), w, h, embedding.data(), SAM2_EMBEDDING_SIZE);
     assert(enc_res == 0);
-    std::cout << "   [Benchmark] EdgeTAM Encoder Latency: " << enc_ms << " ms" << std::endl;
-    // Encoder must run within reasonable mobile time (< 500 ms)
-    assert(enc_ms < 500.0);
 
-    // 4. Test EdgeTAM Decoder (runs per tap)
-    std::vector<uint8_t> mask_1024(1024 * 1024, 0);
-    auto start_dec = std::chrono::high_resolution_clock::now();
-    int dec_res = native_edgetam_decode(
-        handle, embedding.data(), EDGETAM_EMBEDDING_SIZE,
-        out_pad_x, out_pad_y,
-        EDGETAM_CATEGORY_HAIR,
-        mask_1024.data()
-    );
-    auto end_dec = std::chrono::high_resolution_clock::now();
-    double dec_ms = std::chrono::duration<double, std::milli>(end_dec - start_dec).count();
-
+    std::vector<uint8_t> sam2_mask(w * h, 0);
+    int dec_res = native_sam2_decode(handle, embedding.data(), SAM2_EMBEDDING_SIZE, 64.0f, 30.0f, sam2_mask.data(), w, h);
     assert(dec_res == 0);
-    std::cout << "   [Benchmark] EdgeTAM Decoder Latency: " << dec_ms << " ms" << std::endl;
-    // Decoder must run within reasonable interactive time (< 50 ms)
-    assert(dec_ms < 50.0);
+    native_sam2_destroy(handle);
 
-    // 5. Test Reverse Resampling back to source dimensions (128x128)
-    std::vector<uint8_t> mask_src(w * h, 0);
-    native_edgetam_resample_mask_to_source(mask_1024.data(), active_w, active_h, mask_src.data(), w, h);
+    // 2. Test Math Mode: CIELAB Color Tolerance Magic Wand bounded by line art
+    std::vector<uint8_t> wand_mask(w * h, 0);
+    // Tap hair at x=64, y=30
+    native_cielab_magic_wand(
+        portrait_rgba.data(),
+        w, h,
+        64, 30,
+        0.20f, // hue_tolerance
+        0.20f, // color_tolerance
+        wand_mask.data()
+    );
 
-    // 6. Verify mask precision and zero bleed into background
     int hair_pixels = 0, hair_selected = 0;
-    int bg_pixels = 0, bg_selected = 0;
+    int skin_selected = 0, bg_selected = 0;
 
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
-            uint8_t m = mask_src[y * w + x];
-            if (y >= 16 && y <= 40 && x >= 36 && x <= 92) {
-                // Core hair region
+            uint8_t m = wand_mask[y * w + x];
+            if (y >= 16 && y <= 44 && x >= 33 && x <= 95) {
                 hair_pixels++;
-                if (m > 128) hair_selected++;
-            } else if (x <= 15 || x >= 112 || y <= 6) {
-                // Outer background region
-                bg_pixels++;
+                if (m > 0) hair_selected++;
+            } else if (y >= 47 && y <= 92 && x >= 32 && x <= 96) {
+                if (m > 0) skin_selected++;
+            } else if (x <= 20 || x >= 110) {
                 if (m > 0) bg_selected++;
             }
         }
     }
 
-    double hair_recall = (double)hair_selected / hair_pixels;
-    double bg_bleed = (double)bg_selected / bg_pixels;
+    std::cout << "   [Wand Accuracy] Hair Selected: " << hair_selected << "/" << hair_pixels << std::endl;
+    std::cout << "   [Wand Accuracy] Skin Bleed: " << skin_selected << ", BG Bleed: " << bg_selected << std::endl;
 
-    std::cout << "   [Accuracy] Hair Recall: " << (hair_recall * 100.0) << "% (" << hair_selected << "/" << hair_pixels << ")" << std::endl;
-    std::cout << "   [Accuracy] Background Bleed: " << (bg_bleed * 100.0) << "% (" << bg_selected << "/" << bg_pixels << ")" << std::endl;
+    assert(hair_selected == hair_pixels); // 100% hair filled
+    assert(skin_selected == 0);          // Strictly stopped by ink outline!
+    assert(bg_selected == 0);            // Strictly zero background bleed!
 
-    assert(hair_recall > 0.85); // High hair coverage
-    assert(bg_selected == 0);   // STRICT ZERO BLEED INTO BACKGROUND
-    assert(bg_bleed == 0.0);
-
-    native_edgetam_destroy(handle);
-    std::cout << "[PASS] test_edgetam_hair_segmentation_no_bleed passed." << std::endl;
+    std::cout << "[PASS] test_sam2_and_cielab_magic_wand passed." << std::endl;
 }
 
 static double compute_ssim_c(const uint8_t* img1, const uint8_t* img2, int width, int height) {
@@ -528,6 +485,54 @@ void test_potrace_vectorization() {
     std::cout << "[PASS] test_potrace_vectorization passed." << std::endl;
 }
 
+void test_watercolor_wash() {
+    std::cout << "[TEST] Running test_watercolor_wash..." << std::endl;
+    const int w = 64, h = 64;
+    std::vector<uint8_t> src(w * h * 4, 0);
+    std::vector<uint8_t> dst(w * h * 4, 0);
+
+    // Warm portrait colors on left half, cool background on right half
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const int off = (y * w + x) * 4;
+            if (x < w / 2) {
+                src[off] = 220;     // Skin tone warm peach
+                src[off + 1] = 160;
+                src[off + 2] = 130;
+                src[off + 3] = 255;
+            } else {
+                src[off] = 40;      // Deep cool blue
+                src[off + 1] = 80;
+                src[off + 2] = 180;
+                src[off + 3] = 255;
+            }
+        }
+    }
+
+    native_watercolor_wash(src.data(), dst.data(), w, h, 2, 0.45f, 0.05f, 4040);
+
+    // Assert that the warm left half remains warm and cool right half remains cool
+    // No "split-face" stride inversion or channel scrambling
+    int left_r = 0, left_b = 0;
+    int right_r = 0, right_b = 0;
+    for (int y = 5; y < h - 5; ++y) {
+        for (int x = 5; x < w / 2 - 5; ++x) {
+            const int off = (y * w + x) * 4;
+            left_r += dst[off];
+            left_b += dst[off + 2];
+        }
+        for (int x = w / 2 + 5; x < w - 5; ++x) {
+            const int off = (y * w + x) * 4;
+            right_r += dst[off];
+            right_b += dst[off + 2];
+        }
+    }
+
+    assert(left_r > left_b * 1.3); // Warm peach preserved
+    assert(right_b > right_r * 1.5); // Cool blue preserved
+    std::cout << "[PASS] test_watercolor_wash passed." << std::endl;
+}
+
 int main() {
     std::cout << "=== Reranger Native C++ Classical Engine PoC Test Suite ===" << std::endl;
     test_grayscale();
@@ -535,7 +540,8 @@ int main() {
     test_grain_overlay();
     test_recipe_monochrome_ink();
     test_adaptive_vibrancy();
-    test_edgetam_hair_segmentation_no_bleed();
+    test_watercolor_wash();
+    test_sam2_and_cielab_magic_wand();
     test_metadata_annihilation();
     test_armor_attack_and_ssim();
     test_sensor_noise_and_ssim();

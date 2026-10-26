@@ -22,9 +22,9 @@ class BatchCPresets {
       PresetParameter(
         id: 'paperTooth',
         label: 'Cold-Press Tooth',
-        min: 0.05,
-        max: 0.35,
-        defaultValue: 0.18,
+        min: 0.02,
+        max: 0.10,
+        defaultValue: 0.05,
         step: 0.01,
       ),
       PresetParameter(
@@ -40,7 +40,7 @@ class BatchCPresets {
     thumbnailProvenance: 'Synthetically generated from standard Reranger benchmark fixture via IsolateSceneMapGenerator',
     accessibleLabel: 'Wet Watercolor Bleed artistic media style preset',
     buildGraph: (sourceHash, sourceWidth, sourceHeight, params) {
-      final tooth = params['paperTooth'] ?? 0.18;
+      final tooth = params['paperTooth'] ?? 0.05;
       final bleed = params['bleedSoftness'] ?? 0.45;
 
       return RenderGraph(

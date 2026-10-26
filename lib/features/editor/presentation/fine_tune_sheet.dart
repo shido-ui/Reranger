@@ -63,8 +63,10 @@ class FineTuneSheet extends StatelessWidget {
             : AppColorTokens.lightBorderSubtle;
 
         final activePreset = controller.activePreset;
-        final parameters =
-            activePreset?.parameters ?? const <PresetParameter>[];
+        final isLockedStudio = activePreset?.isLockedStudioPreset == true;
+        final parameters = isLockedStudio
+            ? const <PresetParameter>[]
+            : (activePreset?.parameters ?? const <PresetParameter>[]);
 
         return Material(
           color: surfaceElevated,
@@ -149,10 +151,13 @@ class FineTuneSheet extends StatelessWidget {
                             padding: const EdgeInsets.all(AppSpacingTokens.xl),
                             child: Center(
                               child: Text(
-                                'This style is pre-calibrated without extra sliders.',
+                                isLockedStudio
+                                    ? 'Studio Preset: Hyper-premium multi-pass recipe locked for beginner simplicity. Controlled via Studio Strength slider.'
+                                    : 'This style is pre-calibrated without extra sliders.',
                                 style: theme.textTheme.bodyMedium?.copyWith(
                                   color: secondaryText,
                                 ),
+                                textAlign: TextAlign.center,
                               ),
                             ),
                           )

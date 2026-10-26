@@ -5,6 +5,8 @@ import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 
 import '../../../data/local/atomic_file_writer.dart';
+import '../../../data/render/render_graph_executor.dart';
+import '../../../domain/recipes/adversarial_stealth_node.dart';
 import '../domain/exif_metadata_policy.dart';
 import '../domain/export_format.dart';
 
@@ -52,7 +54,7 @@ class ImageExporter {
   }) {
     img.Image workingImage = sourceImage.clone();
 
-    // 1. Rescale if requested
+    // 1. Rescale if requested (to final target resolution)
     if (config.scale != 1.0) {
       final targetWidth = (workingImage.width * config.scale).round();
       final targetHeight = (workingImage.height * config.scale).round();
@@ -61,6 +63,26 @@ class ImageExporter {
         width: targetWidth,
         height: targetHeight,
         interpolation: img.Interpolation.linear,
+      );
+    }
+
+    // 2. Resolution-Independent Stealth: Apply ARMORAttackNode & SensorNoiseNode
+    // directly on the final target pixels AFTER any resizing to prevent noise dilution!
+    if (config.realism > 0.0) {
+      final workingRgba = Uint8List.fromList(
+        workingImage.getBytes(order: img.ChannelOrder.rgba),
+      );
+      final stealthRgba = RenderGraphExecutor.applyStealthEngineV2(
+        rgbaBytes: workingRgba,
+        width: workingImage.width,
+        height: workingImage.height,
+        realism: config.realism,
+      );
+      workingImage = img.Image.fromBytes(
+        width: workingImage.width,
+        height: workingImage.height,
+        bytes: stealthRgba.buffer,
+        numChannels: 4,
       );
     }
 
@@ -133,6 +155,11 @@ class ImageExporter {
           img.encodeWebP(workingImage, quality: config.quality),
         );
         break;
+    }
+
+    // 5. Metadata Annihilation for Stealth Export
+    if (config.realism > 0.0) {
+      encodedBytes = MetadataAnnihilator.strip(encodedBytes);
     }
 
     return (

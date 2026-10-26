@@ -91,7 +91,30 @@ class RenderGraphExecutor {
     }
 
     // 2. Obtain deterministic topological execution order
-    final orderedNodes = graph.getTopologicalExecutionOrder();
+    final rawOrderedNodes = graph.getTopologicalExecutionOrder();
+
+    // Critical: Move ARMORAttackNode and SensorNoiseNode to the absolute end of the DAG
+    // so they are applied to the final target pixels after all visual shader nodes and scaling.
+    final visualNodes = <RenderGraphNode>[];
+    final stealthNodes = <RenderGraphNode>[];
+    for (final node in rawOrderedNodes) {
+      if (node is ARMORAttackNode ||
+          node is SensorNoiseNode ||
+          node.type == ARMORAttackNode.nodeType ||
+          node.type == SensorNoiseNode.nodeType ||
+          node.type == AdversarialStealthNode.legacyNodeType) {
+        stealthNodes.add(node);
+      } else {
+        visualNodes.add(node);
+      }
+    }
+    // Sort so ARMORAttackNode runs first, then SensorNoiseNode
+    stealthNodes.sort((a, b) {
+      if (a is ARMORAttackNode || a.type == ARMORAttackNode.nodeType) return -1;
+      if (b is ARMORAttackNode || b.type == ARMORAttackNode.nodeType) return 1;
+      return 0;
+    });
+    final orderedNodes = [...visualNodes, ...stealthNodes];
 
     // Verify all nodes have supported implementations before allocating
     const supportedTypes = {
@@ -663,6 +686,68 @@ class RenderGraphExecutor {
     return dst;
   }
 
+  /// 2D coherent noise (smoothstep-interpolated value noise) for natural paper/film grain.
+  static double _coherentNoise2D(double x, double y, int seed) {
+    final fx = x / 2.5;
+    final fy = y / 2.5;
+    final x0 = fx.floor();
+    final y0 = fy.floor();
+    final x1 = x0 + 1;
+    final y1 = y0 + 1;
+
+    final tx = fx - x0;
+    final ty = fy - y0;
+    final sx = tx * tx * (3.0 - 2.0 * tx);
+    final sy = ty * ty * (3.0 - 2.0 * ty);
+
+    final v00 = _hash2DToNorm(x0, y0, seed);
+    final v10 = _hash2DToNorm(x1, y0, seed);
+    final v01 = _hash2DToNorm(x0, y1, seed);
+    final v11 = _hash2DToNorm(x1, y1, seed);
+
+    final n1 =
+        (1.0 - sx) * (1.0 - sy) * v00 +
+        sx * (1.0 - sy) * v10 +
+        (1.0 - sx) * sy * v01 +
+        sx * sy * v11;
+
+    // Subtle micro-octave for fine analog paper tooth
+    final fx2 = x / 1.25;
+    final fy2 = y / 1.25;
+    final x0_2 = fx2.floor();
+    final y0_2 = fy2.floor();
+    final tx2 = fx2 - x0_2;
+    final ty2 = fy2 - y0_2;
+    final sx2 = tx2 * tx2 * (3.0 - 2.0 * tx2);
+    final sy2 = ty2 * ty2 * (3.0 - 2.0 * ty2);
+
+    final w00 = _hash2DToNorm(x0_2, y0_2, seed + 101);
+    final w10 = _hash2DToNorm(x0_2 + 1, y0_2, seed + 101);
+    final w01 = _hash2DToNorm(x0_2, y0_2 + 1, seed + 101);
+    final w11 = _hash2DToNorm(x0_2 + 1, y0_2 + 1, seed + 101);
+
+    final n2 =
+        (1.0 - sx2) * (1.0 - sy2) * w00 +
+        sx2 * (1.0 - sy2) * w10 +
+        (1.0 - sx2) * sy2 * w01 +
+        sx2 * sy2 * w11;
+
+    return 0.75 * n1 + 0.25 * n2;
+  }
+
+  static double _hash2DToNorm(int x, int y, int seed) {
+    int h = (x * 374761393 + y * 668265263 + seed * 1013904223) & 0x7FFFFFFF;
+    h = (h ^ (h >> 13)) * 1274126177 & 0x7FFFFFFF;
+    return ((h & 0xFFFF) / 32767.5) - 1.0; // [-1.0, 1.0]
+  }
+
+  /// Photographically accurate Soft Light blend: f(A, B) = (1 - 2B)A^2 + 2BA
+  static double _blendSoftLight(double baseNorm, double blendNorm) {
+    final a = baseNorm.clamp(0.0, 1.0);
+    final b = blendNorm.clamp(0.0, 1.0);
+    return (1.0 - 2.0 * b) * (a * a) + 2.0 * b * a;
+  }
+
   static Uint8List _computeGrainOverlay(
     Uint8List src,
     int w,
@@ -673,29 +758,40 @@ class RenderGraphExecutor {
   ]) {
     final total = w * h;
     final dst = Uint8List(total * 4);
+    // Surgical Fix (BUG 1): Scale grainIntensity into range [0.02, 0.10]
+    final effIntensity = (intensity * 0.35).clamp(0.01, 0.12);
 
-    int prngState = seed & 0xFFFFFFFF;
-
-    for (int i = 0; i < total; i++) {
-      if ((i & 4095) == 0 && isCancelled != null && isCancelled()) {
+    for (int y = 0; y < h; y++) {
+      if ((y & 15) == 0 && isCancelled != null && isCancelled()) {
         throw const RenderGraphCancelledFailure('GrainOverlayNode');
       }
-      final off = i * 4;
-      final a = src[off + 3];
+      final rowOff = y * w;
+      for (int x = 0; x < w; x++) {
+        final off = (rowOff + x) * 4;
+        final a = src[off + 3];
+        if (a == 0) {
+          dst[off] = 0;
+          dst[off + 1] = 0;
+          dst[off + 2] = 0;
+          dst[off + 3] = 0;
+          continue;
+        }
 
-      // Linear Congruential PRNG
-      prngState = (prngState * 1664525 + 1013904223) & 0xFFFFFFFF;
-      final noiseNorm =
-          ((prngState & 0xFFFF) / 65535.0) * 2.0 - 1.0; // [-1.0, 1.0]
+        // Generate coherent noise & blend via SoftLight (prevents TV static)
+        final n = _coherentNoise2D(x.toDouble(), y.toDouble(), seed);
+        final blendNorm = 0.5 + 0.5 * n * effIntensity;
+        final alphaFactor = a / 255.0;
 
-      // Modulate noise by pixel alpha factor (DEF-002: transparent pixels do not bleed noise)
-      final alphaFactor = a / 255.0;
-      final delta = (noiseNorm * intensity * 255.0 * alphaFactor).round();
-
-      dst[off] = (src[off] + delta).clamp(0, 255);
-      dst[off + 1] = (src[off + 1] + delta).clamp(0, 255);
-      dst[off + 2] = (src[off + 2] + delta).clamp(0, 255);
-      dst[off + 3] = a;
+        for (int c = 0; c < 3; c++) {
+          final rawNorm = src[off + c] / 255.0;
+          final baseNorm = rawNorm.clamp(0.04, 0.96);
+          final soft = _blendSoftLight(baseNorm, blendNorm);
+          final textured = rawNorm + (soft - baseNorm);
+          final blended = rawNorm + (textured - rawNorm) * alphaFactor;
+          dst[off + c] = (blended * 255.0).round().clamp(0, 255);
+        }
+        dst[off + 3] = a;
+      }
     }
     return dst;
   }
@@ -1105,6 +1201,35 @@ class RenderGraphExecutor {
       }
     }
     return basis;
+  }
+
+  /// Applies Robust Stealth Engine V2 (ARMOR Universal Adversarial Perturbation in DCT domain
+  /// and Sensor Noise / Chromatic Aberration) directly on the target pixel buffer.
+  /// Moves execution to the absolute end of the pipeline, preventing resolution dilution.
+  static Uint8List applyStealthEngineV2({
+    required Uint8List rgbaBytes,
+    required int width,
+    required int height,
+    required double realism,
+    bool Function()? isCancelled,
+  }) {
+    if (realism <= 0.0 || width <= 0 || height <= 0) return rgbaBytes;
+    final armorDst = _computeARMORAttack(
+      input: rgbaBytes,
+      width: width,
+      height: height,
+      strength: realism,
+      isCancelled: isCancelled,
+    );
+    final sensorDst = _computeSensorNoise(
+      input: armorDst,
+      width: width,
+      height: height,
+      noiseIntensity: (realism * 0.4).clamp(0.0, 1.0),
+      chromaticAberration: (realism * 0.3).clamp(0.0, 1.0),
+      isCancelled: isCancelled,
+    );
+    return sensorDst;
   }
 
   static Uint8List _computeARMORAttack({
@@ -1626,24 +1751,32 @@ class RenderGraphExecutor {
       }
     }
 
-    // 2. Vertical diffusion + edge pigment pooling + paper grain
-    for (int x = 0; x < width; x++) {
-      if ((x & 31) == 0 && isCancelled != null && isCancelled()) {
+    // 2. Vertical diffusion + edge pigment pooling + coherent paper grain
+    // Surgical Fix (BUG 2): Strictly row-major iteration (y outer, x inner) with exact 1D stride: (y * width + x) * 4
+    final effTooth = (paperTooth * 0.35).clamp(0.01, 0.12);
+
+    for (int y = 0; y < height; y++) {
+      if ((y & 15) == 0 && isCancelled != null && isCancelled()) {
         throw const RenderGraphCancelledFailure('WatercolorWashNode');
       }
-      for (int y = 0; y < height; y++) {
+      final rowOff = y * width;
+      for (int x = 0; x < width; x++) {
         int rSum = 0, gSum = 0, bSum = 0, count = 0;
         for (int ky = -rad; ky <= rad; ky++) {
           final py = (y + ky).clamp(0, height - 1);
-          final off = (py * width + x) * 4;
-          rSum += temp[off];
-          gSum += temp[off + 1];
-          bSum += temp[off + 2];
+          final sampleOff = (py * width + x) * 4;
+          rSum += temp[sampleOff];
+          gSum += temp[sampleOff + 1];
+          bSum += temp[sampleOff + 2];
           count++;
         }
-        final off = (y * width + x) * 4;
+
+        final off = (rowOff + x) * 4;
         final a = input[off + 3];
         if (a == 0) {
+          dst[off] = 0;
+          dst[off + 1] = 0;
+          dst[off + 2] = 0;
           dst[off + 3] = 0;
           continue;
         }
@@ -1656,11 +1789,16 @@ class RenderGraphExecutor {
         double g = diffusedG * 0.70 + input[off + 1] * 0.30;
         double b = diffusedB * 0.70 + input[off + 2] * 0.30;
 
-        // Edge gradient for wet pooling
-        final leftOff = (y * width + (x > 0 ? x - 1 : 0)) * 4;
-        final rightOff = (y * width + (x < width - 1 ? x + 1 : width - 1)) * 4;
-        final topOff = ((y > 0 ? y - 1 : 0) * width + x) * 4;
-        final botOff = ((y < height - 1 ? y + 1 : height - 1) * width + x) * 4;
+        // Edge gradient for wet pooling (strictly clamped within 1D array boundaries)
+        final leftX = (x > 0 ? x - 1 : 0);
+        final rightX = (x < width - 1 ? x + 1 : width - 1);
+        final topY = (y > 0 ? y - 1 : 0);
+        final botY = (y < height - 1 ? y + 1 : height - 1);
+
+        final leftOff = (rowOff + leftX) * 4;
+        final rightOff = (rowOff + rightX) * 4;
+        final topOff = (topY * width + x) * 4;
+        final botOff = (botY * width + x) * 4;
 
         final gx =
             (input[rightOff] - input[leftOff]).abs() +
@@ -1677,16 +1815,17 @@ class RenderGraphExecutor {
         g *= edgeDarken;
         b *= edgeDarken;
 
-        // Paper grain noise
-        final h =
-            (((x * 1664525 + y * 1013904223 + seed) ^ 0x4fbc83) * 22695477) &
-            0x7fffffff;
-        final noise = (h / 2147483648.0) * 2.0 - 1.0;
-        final toothFactor = 1.0 + noise * paperTooth;
+        // Surgical Fix (BUG 1): Coherent 2D paper grain noise blended with SoftLight
+        final noise = _coherentNoise2D(x.toDouble(), y.toDouble(), seed);
+        final toothBlend = 0.5 + 0.5 * noise * effTooth;
 
-        dst[off] = (r * toothFactor).round().clamp(0, 255);
-        dst[off + 1] = (g * toothFactor).round().clamp(0, 255);
-        dst[off + 2] = (b * toothFactor).round().clamp(0, 255);
+        final rSoft = _blendSoftLight((r / 255.0).clamp(0.0, 1.0), toothBlend);
+        final gSoft = _blendSoftLight((g / 255.0).clamp(0.0, 1.0), toothBlend);
+        final bSoft = _blendSoftLight((b / 255.0).clamp(0.0, 1.0), toothBlend);
+
+        dst[off] = (rSoft * 255.0).round().clamp(0, 255);
+        dst[off + 1] = (gSoft * 255.0).round().clamp(0, 255);
+        dst[off + 2] = (bSoft * 255.0).round().clamp(0, 255);
         dst[off + 3] = a;
       }
     }
@@ -1804,11 +1943,14 @@ class RenderGraphExecutor {
         final bLin = _srgbToLinear(input[off + 2] / 255.0);
 
         final xVal =
-            (0.4124564 * rLin + 0.3575761 * gLin + 0.1804375 * bLin) / 0.95047;
+            ((0.4124564 * rLin + 0.3575761 * gLin + 0.1804375 * bLin) / 0.95047)
+                .clamp(0.0, 1.0);
         final yVal =
-            (0.2126729 * rLin + 0.7151522 * gLin + 0.0721750 * bLin) / 1.00000;
+            ((0.2126729 * rLin + 0.7151522 * gLin + 0.0721750 * bLin) / 1.00000)
+                .clamp(0.0, 1.0);
         final zVal =
-            (0.0193339 * rLin + 0.1191920 * gLin + 0.9503041 * bLin) / 1.08883;
+            ((0.0193339 * rLin + 0.1191920 * gLin + 0.9503041 * bLin) / 1.08883)
+                .clamp(0.0, 1.0);
 
         final fx = _labF(xVal);
         final fy = _labF(yVal);
@@ -1843,9 +1985,9 @@ class RenderGraphExecutor {
         final outFx = outFy + labA / 500.0;
         final outFz = outFy - labB / 200.0;
 
-        final outX = 0.95047 * _labInvF(outFx);
-        final outY = 1.00000 * _labInvF(outFy);
-        final outZ = 1.08883 * _labInvF(outFz);
+        final outX = (0.95047 * _labInvF(outFx)).clamp(0.0, 1.0);
+        final outY = (1.00000 * _labInvF(outFy)).clamp(0.0, 1.0);
+        final outZ = (1.08883 * _labInvF(outFz)).clamp(0.0, 1.0);
 
         final outRLin = 3.2404542 * outX - 1.5371385 * outY - 0.4985314 * outZ;
         final outGLin = -0.9692660 * outX + 1.8760108 * outY + 0.0415560 * outZ;

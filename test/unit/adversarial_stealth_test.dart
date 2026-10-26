@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -17,6 +18,8 @@ import 'package:reranger/domain/recipes/render_graph_node.dart';
 import 'package:reranger/features/detector_lab/detector_lab_models.dart';
 import 'package:reranger/features/editor/presentation/editor_controller.dart';
 import 'package:reranger/features/editor/presentation/pro_tools_sheet.dart';
+import 'package:reranger/features/export/data/image_exporter.dart';
+import 'package:reranger/features/export/domain/export_format.dart';
 import 'package:reranger/features/presets/data/preset_catalog.dart';
 
 double computeSsim(Uint8List img1, Uint8List img2, int width, int height) {
@@ -491,6 +494,131 @@ void main() {
           );
         }
       }
+    });
+
+    test('8. Resolution-Independent Stealth Export: Adversarial UAP noise is applied identically at 100% and 200% resolutions without dilution', () async {
+      const realism = 0.8;
+      final exporter = ImageExporter();
+
+      // Create a solid image (64x64) where every input pixel is exactly 128
+      final source = img.Image(width: 64, height: 64, numChannels: 4);
+      img.fill(source, color: img.ColorRgba8(128, 128, 128, 255));
+      final solidBytes = Uint8List.fromList(img.encodePng(source));
+      final solidHash = sha256.convert(solidBytes).toString();
+
+      // 1. Verify that the adversarial UAP noise itself is applied IDENTICALLY at 100% and 200% resolutions
+      final executor = RenderGraphExecutor();
+      final armorGraph100 = RenderGraph(
+        id: 'armor_100',
+        nodes: {
+          'src_0': SourceImageNode(
+            id: 'src_0',
+            sourceImageHash: solidHash,
+            sourceWidth: 64,
+            sourceHeight: 64,
+          ),
+          'armor_0': ARMORAttackNode(
+            id: 'armor_0',
+            inputNodeId: 'src_0',
+            strength: realism,
+          ),
+        },
+        outputNodeId: 'armor_0',
+      );
+      final armorResult100 = await executor.execute(
+        graph: armorGraph100,
+        sourceImageBytes: solidBytes,
+        renderScale: 1.0,
+      );
+      final armorResult200 = await executor.execute(
+        graph: armorGraph100,
+        sourceImageBytes: solidBytes,
+        renderScale: 2.0,
+      );
+
+      expect(armorResult100.width, 64);
+      expect(armorResult100.height, 64);
+      expect(armorResult200.width, 128);
+      expect(armorResult200.height, 128);
+
+      // Verify UAP noise at 8x8 DCT grid coordinates:
+      // The delta added to target pixel (x, y) must match identically between 100% and 200%
+      for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 8; x++) {
+          final idx100 = (y * 64 + x) * 4;
+          final idx200 = (y * 128 + x) * 4;
+
+          final delta100 = armorResult100.pixelBytes[idx100] - 128;
+          final delta200 = armorResult200.pixelBytes[idx200] - 128;
+
+          expect(
+            delta200,
+            equals(delta100),
+            reason:
+                'Adversarial UAP noise at target pixel ($x, $y) must match identically between 100% and 200%',
+          );
+        }
+      }
+
+      // 2. Verify that ImageExporter with Stealth Engine applies resolution-hardened noise without dilution
+      final encoded100 = exporter.encode(
+        sourceImage: source,
+        config: const ExportConfiguration(scale: 1.0, realism: realism),
+      );
+      final decoded100 = img.decodeImage(encoded100.bytes)!;
+
+      final encoded200 = exporter.encode(
+        sourceImage: source,
+        config: const ExportConfiguration(scale: 2.0, realism: realism),
+      );
+      final decoded200 = img.decodeImage(encoded200.bytes)!;
+
+      expect(decoded100.width, 64);
+      expect(decoded100.height, 64);
+      expect(decoded200.width, 128);
+      expect(decoded200.height, 128);
+
+      for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 8; x++) {
+          final p100 = decoded100.getPixel(x, y);
+          final p200 = decoded200.getPixel(x, y);
+
+          final delta100 = p100.r - 128;
+          final delta200 = p200.r - 128;
+
+          expect(
+            (delta200 - delta100).abs(),
+            lessThanOrEqualTo(4),
+            reason:
+                'Full Stealth Export noise at target pixel ($x, $y) must match within chromatic aberration radial offset bounds',
+          );
+        }
+      }
+
+      // Also verify across multiple 8x8 blocks in the 200% image:
+      // The noise must not be diluted (RMS power across pixels in 200% image must match 100% image)
+      double sumSq100 = 0.0;
+      for (final p in decoded100) {
+        final d = p.r - 128;
+        sumSq100 += d * d;
+      }
+      final rms100 = math.sqrt(sumSq100 / (64 * 64));
+
+      double sumSq200 = 0.0;
+      for (final p in decoded200) {
+        final d = p.r - 128;
+        sumSq200 += d * d;
+      }
+      final rms200 = math.sqrt(sumSq200 / (128 * 128));
+
+      // In a diluted image, rms200 would drop to ~0.5 * rms100 due to bilinear blur.
+      // In resolution-independent stealth, rms200 is within 10% of rms100!
+      expect(
+        (rms200 - rms100).abs() / rms100,
+        lessThan(0.10),
+        reason:
+            'Adversarial perturbation RMS power must not be diluted at 200% resolution (RMS100: $rms100, RMS200: $rms200)',
+      );
     });
   });
 }

@@ -103,9 +103,9 @@ class ExpandedPresets {
       PresetParameter(
         id: 'smudgeGrain',
         label: 'Smudge Tooth',
-        min: 0.1,
-        max: 0.40,
-        defaultValue: 0.28,
+        min: 0.02,
+        max: 0.10,
+        defaultValue: 0.06,
         step: 0.01,
       ),
     ],
@@ -114,7 +114,7 @@ class ExpandedPresets {
     accessibleLabel: 'Charcoal smudged drawing style preset',
     buildGraph: (sourceHash, sourceWidth, sourceHeight, params) {
       final density = params['charcoalDensity'] ?? 0.88;
-      final grain = params['smudgeGrain'] ?? 0.28;
+      final grain = params['smudgeGrain'] ?? 0.06;
 
       return RenderGraph(
         id: 'graph_charcoal',
@@ -447,7 +447,7 @@ class ExpandedPresets {
             inputNodeId: 'src_0',
             washDiffusion: (diff * 5.0).round().clamp(1, 4),
             wetEdgeBleed: diff * (gamma / 1.15),
-            paperTooth: 0.16,
+            paperTooth: 0.05,
             seed: 4041,
           ),
           'vib_out': AdaptiveVibrancyNode(

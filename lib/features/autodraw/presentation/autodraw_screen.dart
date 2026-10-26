@@ -8,6 +8,8 @@ import 'package:image/image.dart' as img;
 
 import '../../../core/theme/color_tokens.dart';
 import '../../../core/theme/spacing_tokens.dart';
+import '../../../domain/recipes/render_graph.dart';
+import '../data/autodraw_pipeline.dart';
 import '../data/potrace_vectorizer.dart';
 import '../data/video_timelapse_recorder.dart';
 import '../domain/autodraw_models.dart';
@@ -19,12 +21,16 @@ import '../domain/autodraw_models.dart';
 class AutodrawScreen extends StatefulWidget {
   final String projectId;
   final Uint8List? sourceImageBytes;
+  final Uint8List? processedImageBytes;
+  final RenderGraph? renderGraph;
   final VideoTimelapseRecorder? recorderOverride;
 
   const AutodrawScreen({
     super.key,
     required this.projectId,
     this.sourceImageBytes,
+    this.processedImageBytes,
+    this.renderGraph,
     this.recorderOverride,
   });
 
@@ -71,7 +77,30 @@ class _AutodrawScreenState extends State<AutodrawScreen>
 
   Future<void> _initializeAutodraw() async {
     try {
-      Uint8List? rawBytes = widget.sourceImageBytes;
+      Uint8List? rawBytes = widget.processedImageBytes;
+
+      if (rawBytes == null) {
+        // If renderGraph is supplied, run full shader pipeline to sample processed colors
+        if (widget.renderGraph != null && widget.sourceImageBytes != null) {
+          final pipeline = AutodrawPipeline();
+          final result = await pipeline.processAndVectorize(
+            sourceImageBytes: widget.sourceImageBytes!,
+            renderGraph: widget.renderGraph!,
+            maxPaths: 180,
+          );
+          if (mounted) {
+            setState(() {
+              _vectorResult = result;
+              _isLoading = false;
+            });
+            await _recorder.startRecording();
+            _ticker.start();
+          }
+          return;
+        }
+
+        rawBytes = widget.sourceImageBytes;
+      }
 
       if (rawBytes == null) {
         // Fallback synthetic bitmap if no explicit bytes injected
@@ -340,18 +369,25 @@ class _AutodrawScreenState extends State<AutodrawScreen>
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text(
-                              'Strokes: $_currentStrokeIndex / ${_vectorResult?.strokes.length ?? 0}',
-                              style: theme.textTheme.labelMedium?.copyWith(
-                                color: primaryText,
-                                fontWeight: FontWeight.w600,
+                            Expanded(
+                              child: Text(
+                                'Strokes: $_currentStrokeIndex / ${_vectorResult?.strokes.length ?? 0}',
+                                style: theme.textTheme.labelMedium?.copyWith(
+                                  color: primaryText,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                            Text(
-                              'Recorded: ${_recorder.recordedFrameCount} frames (${(_recorder.totalBytesWritten / (1024 * 1024)).toStringAsFixed(1)} MB)',
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: secondaryText,
-                                fontFamily: 'monospace',
+                            const SizedBox(width: AppSpacingTokens.xs),
+                            Flexible(
+                              child: Text(
+                                'Recorded: ${_recorder.recordedFrameCount} frames (${(_recorder.totalBytesWritten / (1024 * 1024)).toStringAsFixed(1)} MB)',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: secondaryText,
+                                  fontFamily: 'monospace',
+                                ),
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           ],
@@ -368,51 +404,54 @@ class _AutodrawScreenState extends State<AutodrawScreen>
                         ),
                         const SizedBox(height: AppSpacingTokens.sm),
 
-                        // Play/Pause & Speed Row
-                        Row(
-                          children: [
-                            IconButton(
-                              key: const Key('autodraw_play_pause_button'),
-                              icon: Icon(
-                                _isPlaying ? Icons.pause : Icons.play_arrow,
+                        // Play/Pause & Speed Row (Horizontal scroll prevents UI RenderFlex overflow)
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: [
+                              IconButton(
+                                key: const Key('autodraw_play_pause_button'),
+                                icon: Icon(
+                                  _isPlaying ? Icons.pause : Icons.play_arrow,
+                                ),
+                                tooltip: _isPlaying ? 'Pause' : 'Play',
+                                onPressed: () {
+                                  setState(() {
+                                    _isPlaying = !_isPlaying;
+                                    if (_isPlaying) {
+                                      _ticker.start();
+                                    } else {
+                                      _ticker.stop();
+                                    }
+                                  });
+                                },
                               ),
-                              tooltip: _isPlaying ? 'Pause' : 'Play',
-                              onPressed: () {
-                                setState(() {
-                                  _isPlaying = !_isPlaying;
-                                  if (_isPlaying) {
-                                    _ticker.start();
-                                  } else {
-                                    _ticker.stop();
-                                  }
-                                });
-                              },
-                            ),
-                            const SizedBox(width: AppSpacingTokens.xs),
-                            Chip(
-                              label: Text(
-                                'Background: ${_vectorResult?.backgroundCount ?? 0}',
-                                style: const TextStyle(fontSize: 11),
+                              const SizedBox(width: AppSpacingTokens.xs),
+                              Chip(
+                                label: Text(
+                                  'Background: ${_vectorResult?.backgroundCount ?? 0}',
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                                backgroundColor: surfaceBase,
                               ),
-                              backgroundColor: surfaceBase,
-                            ),
-                            const SizedBox(width: AppSpacingTokens.xs),
-                            Chip(
-                              label: Text(
-                                'Midtones: ${_vectorResult?.midtonesCount ?? 0}',
-                                style: const TextStyle(fontSize: 11),
+                              const SizedBox(width: AppSpacingTokens.xs),
+                              Chip(
+                                label: Text(
+                                  'Midtones: ${_vectorResult?.midtonesCount ?? 0}',
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                                backgroundColor: surfaceBase,
                               ),
-                              backgroundColor: surfaceBase,
-                            ),
-                            const SizedBox(width: AppSpacingTokens.xs),
-                            Chip(
-                              label: Text(
-                                'Highlights: ${_vectorResult?.highlightsCount ?? 0}',
-                                style: const TextStyle(fontSize: 11),
+                              const SizedBox(width: AppSpacingTokens.xs),
+                              Chip(
+                                label: Text(
+                                  'Highlights: ${_vectorResult?.highlightsCount ?? 0}',
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                                backgroundColor: surfaceBase,
                               ),
-                              backgroundColor: surfaceBase,
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ],
                     ),

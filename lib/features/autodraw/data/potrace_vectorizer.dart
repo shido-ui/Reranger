@@ -215,6 +215,46 @@ class PotraceVectorizer {
       ...hiStrokes,
     ];
 
+    // Fallback perimeter stroke to guarantee > 0 strokes on uniform/flat images
+    if (allStrokes.isEmpty && width > 0 && height > 0) {
+      final fw = width.toDouble();
+      final fh = height.toDouble();
+      final firstColor = rgba.length >= 4
+          ? Color.fromARGB(255, rgba[0], rgba[1], rgba[2])
+          : const Color(0xFF808080);
+      allStrokes.add(
+        AutodrawStroke(
+          id: 1,
+          layer: AutodrawTonalLayer.midtones,
+          color: firstColor,
+          strokeWidth: 2.0,
+          startPoint: Offset.zero,
+          segments: [
+            BezierSegment(
+              cp1: Offset(fw * 0.33, 0),
+              cp2: Offset(fw * 0.66, 0),
+              end: Offset(fw, 0),
+            ),
+            BezierSegment(
+              cp1: Offset(fw, fh * 0.33),
+              cp2: Offset(fw, fh * 0.66),
+              end: Offset(fw, fh),
+            ),
+            BezierSegment(
+              cp1: Offset(fw * 0.66, fh),
+              cp2: Offset(fw * 0.33, fh),
+              end: Offset(0, fh),
+            ),
+            BezierSegment(
+              cp1: Offset(0, fh * 0.66),
+              cp2: Offset(0, fh * 0.33),
+              end: Offset.zero,
+            ),
+          ],
+        ),
+      );
+    }
+
     return AutodrawVectorizationResult(
       width: width,
       height: height,

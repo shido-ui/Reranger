@@ -151,11 +151,11 @@ void main() {
 
         // Adjust parameter and test reset-per-control
         await tester.runAsync(() async {
-          await controller.updateParameter('grainIntensity', 0.30);
+          await controller.updateParameter('grainIntensity', 0.08);
         });
         await settleSheet(tester);
 
-        expect(controller.parameterValues['grainIntensity'], equals(0.30));
+        expect(controller.parameterValues['grainIntensity'], equals(0.08));
 
         // Tap reset for Paper Tooth
         final resetToothFinder = find.byTooltip('Reset Paper Tooth');
@@ -163,13 +163,13 @@ void main() {
         await tester.tap(resetToothFinder);
         await settleSheet(tester);
 
-        // Verify parameter returned to default (0.15)
-        expect(controller.parameterValues['grainIntensity'], equals(0.15));
+        // Verify parameter returned to default (0.05)
+        expect(controller.parameterValues['grainIntensity'], equals(0.05));
 
         // Test Reset All
         await tester.runAsync(() async {
           await controller.updateParameter('pencilHardness', 0.90);
-          await controller.updateParameter('grainIntensity', 0.25);
+          await controller.updateParameter('grainIntensity', 0.08);
         });
         await settleSheet(tester);
 
@@ -177,7 +177,7 @@ void main() {
         await settleSheet(tester);
 
         expect(controller.parameterValues['pencilHardness'], equals(0.65));
-        expect(controller.parameterValues['grainIntensity'], equals(0.15));
+        expect(controller.parameterValues['grainIntensity'], equals(0.05));
 
         // Close sheet
         await tester.tap(find.byTooltip('Close fine-tune'));
