@@ -648,6 +648,89 @@ void native_latent_sanitization(
     }
 }
 
+void native_bilateral_filter_sanitization(
+    const uint8_t* src,
+    uint8_t* dst,
+    int width,
+    int height,
+    float spatial_sigma,
+    float range_sigma,
+    float strength
+) {
+    if (!src || !dst || width <= 0 || height <= 0) return;
+    const int total = width * height;
+    float s = std::clamp(strength, 0.0f, 1.0f);
+    if (s <= 0.001f) {
+        std::copy(src, src + total * 4, dst);
+        return;
+    }
+
+    float sigma_s = (spatial_sigma <= 0.1f) ? 2.5f : spatial_sigma;
+    float sigma_r = (range_sigma <= 0.1f) ? 30.0f : range_sigma;
+    float two_sigma_s_sq = 2.0f * sigma_s * sigma_s;
+    float two_sigma_r_sq = 2.0f * sigma_r * sigma_r;
+
+    // Radius 2 (5x5 spatial window)
+    const int R = 2;
+    float spatial_weights[5][5];
+    for (int dy = -R; dy <= R; ++dy) {
+        for (int dx = -R; dx <= R; ++dx) {
+            spatial_weights[dy + R][dx + R] = std::exp(-(dx * dx + dy * dy) / two_sigma_s_sq);
+        }
+    }
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int idx = (y * width + x) * 4;
+            float r0 = src[idx];
+            float g0 = src[idx + 1];
+            float b0 = src[idx + 2];
+
+            float sum_r = 0.0f, sum_g = 0.0f, sum_b = 0.0f;
+            float weight_sum = 0.0f;
+
+            for (int dy = -R; dy <= R; ++dy) {
+                int py = std::clamp(y + dy, 0, height - 1);
+                for (int dx = -R; dx <= R; ++dx) {
+                    int px = std::clamp(x + dx, 0, width - 1);
+                    int n_idx = (py * width + px) * 4;
+
+                    float nr = src[n_idx];
+                    float ng = src[n_idx + 1];
+                    float nb = src[n_idx + 2];
+
+                    float diff_r = nr - r0;
+                    float diff_g = ng - g0;
+                    float diff_b = nb - b0;
+                    float color_dist_sq = diff_r * diff_r + diff_g * diff_g + diff_b * diff_b;
+
+                    float w = spatial_weights[dy + R][dx + R] * std::exp(-color_dist_sq / two_sigma_r_sq);
+                    sum_r += nr * w;
+                    sum_g += ng * w;
+                    sum_b += nb * w;
+                    weight_sum += w;
+                }
+            }
+
+            if (weight_sum > 0.0001f) {
+                float inv_w = 1.0f / weight_sum;
+                float filt_r = sum_r * inv_w;
+                float filt_g = sum_g * inv_w;
+                float filt_b = sum_b * inv_w;
+
+                dst[idx]     = static_cast<uint8_t>(std::clamp(std::round((1.0f - s) * r0 + s * filt_r), 0.0f, 255.0f));
+                dst[idx + 1] = static_cast<uint8_t>(std::clamp(std::round((1.0f - s) * g0 + s * filt_g), 0.0f, 255.0f));
+                dst[idx + 2] = static_cast<uint8_t>(std::clamp(std::round((1.0f - s) * b0 + s * filt_b), 0.0f, 255.0f));
+            } else {
+                dst[idx]     = src[idx];
+                dst[idx + 1] = src[idx + 1];
+                dst[idx + 2] = src[idx + 2];
+            }
+            dst[idx + 3] = src[idx + 3]; // Preserve alpha
+        }
+    }
+}
+
 // ARMOR++ Universal Adversarial Perturbation (UAP) 8x8 DCT tensor (Mandate 1 & 2):
 // Hardened for JPEG Q75 quantization survival and targeted mid-frequency AC excitation.
 static const float ARMOR_PLUS_PLUS_DCT[8][8] = {
@@ -675,21 +758,23 @@ static float compute_spatial_uap_delta(int x8, int y8) {
     return sum * 0.25f;
 }
 
-// Differentiable JPEG Quality 75 Luminance Quantization Matrix
-static const float JPEG_Q75_QUANT[8][8] = {
-    { 8.0f,  6.0f,  5.0f,  8.0f, 12.0f, 20.0f, 26.0f, 31.0f},
-    { 6.0f,  6.0f,  7.0f, 10.0f, 13.0f, 29.0f, 30.0f, 28.0f},
-    { 7.0f,  7.0f,  8.0f, 12.0f, 20.0f, 29.0f, 35.0f, 28.0f},
-    { 7.0f,  9.0f, 11.0f, 15.0f, 26.0f, 44.0f, 40.0f, 31.0f},
-    { 9.0f, 11.0f, 19.0f, 28.0f, 34.0f, 55.0f, 52.0f, 39.0f},
-    {12.0f, 18.0f, 28.0f, 32.0f, 41.0f, 52.0f, 57.0f, 46.0f},
-    {25.0f, 32.0f, 39.0f, 44.0f, 52.0f, 61.0f, 60.0f, 51.0f},
-    {36.0f, 46.0f, 48.0f, 49.0f, 56.0f, 50.0f, 52.0f, 50.0f}
+// Standard IJG JPEG 50 Luminance Quantization Matrix
+static const float JPEG_BASE_QUANT[8][8] = {
+    {16.0f, 11.0f, 10.0f, 16.0f,  24.0f,  40.0f,  51.0f,  61.0f},
+    {12.0f, 12.0f, 14.0f, 19.0f,  26.0f,  58.0f,  60.0f,  55.0f},
+    {14.0f, 13.0f, 16.0f, 24.0f,  40.0f,  57.0f,  69.0f,  56.0f},
+    {14.0f, 17.0f, 22.0f, 29.0f,  51.0f,  87.0f,  80.0f,  62.0f},
+    {18.0f, 22.0f, 37.0f, 56.0f,  68.0f, 109.0f, 103.0f,  77.0f},
+    {24.0f, 35.0f, 55.0f, 64.0f,  81.0f, 104.0f, 113.0f,  92.0f},
+    {49.0f, 64.0f, 78.0f, 87.0f, 103.0f, 121.0f, 120.0f, 101.0f},
+    {72.0f, 92.0f, 95.0f, 98.0f, 112.0f, 100.0f, 103.0f,  99.0f}
 };
 
-static void diff_jpeg_q75_block(const float block_in[8][8], float block_out[8][8]) {
+static void diff_jpeg_quant_block(const float block_in[8][8], float block_out[8][8], int quality) {
     static const float PI = 3.14159265358979323846f;
     float dct[8][8];
+
+    float factor = (quality < 50) ? (5000.0f / quality) : (200.0f - 2.0f * quality);
 
     // 8x8 2D-DCT
     for (int u = 0; u < 8; ++u) {
@@ -708,11 +793,12 @@ static void diff_jpeg_q75_block(const float block_in[8][8], float block_out[8][8
         }
     }
 
-    // Differentiable Q75 Quantization & De-quantization
+    // Dynamic Quantization & De-quantization
     float quant_dct[8][8];
     for (int v = 0; v < 8; ++v) {
         for (int u = 0; u < 8; ++u) {
-            float q = JPEG_Q75_QUANT[v][u];
+            float base_q = JPEG_BASE_QUANT[v][u];
+            float q = std::clamp(std::floor((base_q * factor + 50.0f) / 100.0f), 1.0f, 255.0f);
             quant_dct[v][u] = std::round(dct[v][u] / q) * q;
         }
     }
@@ -735,12 +821,38 @@ static void diff_jpeg_q75_block(const float block_in[8][8], float block_out[8][8
     }
 }
 
-void native_armor_attack(
+static void diff_resize_block(const float block_in[8][8], float block_out[8][8], float scale) {
+    for (int y = 0; y < 8; ++y) {
+        float sy = (y - 3.5f) * scale + 3.5f;
+        int y0 = std::clamp(static_cast<int>(std::floor(sy)), 0, 7);
+        int y1 = std::clamp(y0 + 1, 0, 7);
+        float fy = sy - std::floor(sy);
+
+        for (int x = 0; x < 8; ++x) {
+            float sx = (x - 3.5f) * scale + 3.5f;
+            int x0 = std::clamp(static_cast<int>(std::floor(sx)), 0, 7);
+            int x1 = std::clamp(x0 + 1, 0, 7);
+            float fx = sx - std::floor(sx);
+
+            float top = (1.0f - fx) * block_in[y0][x0] + fx * block_in[y0][x1];
+            float bot = (1.0f - fx) * block_in[y1][x0] + fx * block_in[y1][x1];
+            block_out[y][x] = (1.0f - fy) * top + fy * bot;
+        }
+    }
+}
+
+// 10 random JPEG compression cycles (Quality 75-90) & 10 random resizes (0.8x-1.2x) for EOT
+static const int EOT_QUALITIES[10] = { 75, 82, 78, 88, 80, 85, 77, 90, 83, 86 };
+static const float EOT_SCALES[10] = { 0.82f, 1.15f, 0.90f, 1.08f, 0.85f, 1.20f, 0.95f, 1.05f, 0.80f, 1.12f };
+
+void native_armor_attack_eot(
     const uint8_t* src,
     uint8_t* dst,
     int width,
     int height,
-    float strength
+    float strength,
+    float max_linf,
+    int use_eot
 ) {
     if (!src || !dst || width <= 0 || height <= 0) return;
     const int total = width * height;
@@ -759,9 +871,8 @@ void native_armor_attack(
         }
     }
 
-    // Maximum L_inf bound strictly capped at 8.0 (8/255 on pixel scale) at strength 1.0
-    const float max_linf = 8.0f * eps;
-    const int max_delta_int = static_cast<int>(std::round(max_linf));
+    const float bound_linf = (max_linf > 0.0f ? max_linf : 16.0f) * eps;
+    const int max_delta_int = static_cast<int>(std::round(bound_linf));
 
     std::vector<float> delta_map(width * height, 0.0f);
 
@@ -826,13 +937,11 @@ void native_armor_attack(
                                  w_jsma * delta_jsma +
                                  w_bsr * delta_bsr) / w_sum;
 
-            delta_map[y * width + x] = std::clamp(delta_mixed, -max_linf, max_linf);
+            delta_map[y * width + x] = std::clamp(delta_mixed, -bound_linf, bound_linf);
         }
     }
 
-    // JPEG-Robust I-FGSM Optimization Loop (Mandate 3):
-    // Optimize perturbation in 8x8 blocks through differentiable JPEG Q75 layer
-    // so adversarial signal survives lossy compression while respecting L_inf <= 8/255.
+    // Expectation Over Transformation (EOT) optimization loop (Mandate 2)
     for (int by = 0; by < height; by += 8) {
         for (int bx = 0; bx < width; bx += 8) {
             float block_orig[8][8];
@@ -850,23 +959,49 @@ void native_armor_attack(
                 }
             }
 
-            for (int iter = 0; iter < 2; ++iter) {
-                float block_perturbed[8][8];
-                float block_jpeg[8][8];
+            if (use_eot) {
+                // Simulate 10 random JPEG compression cycles (Quality 75-90) & 10 random resizes (0.8x to 1.2x)
+                for (int k = 0; k < 10; ++k) {
+                    float block_perturbed[8][8];
+                    float block_resized[8][8];
+                    float block_jpeg[8][8];
 
-                for (int y = 0; y < 8; ++y) {
-                    for (int x = 0; x < 8; ++x) {
-                        block_perturbed[y][x] = std::clamp(block_orig[y][x] + block_delta[y][x], 0.0f, 255.0f);
+                    for (int y = 0; y < 8; ++y) {
+                        for (int x = 0; x < 8; ++x) {
+                            block_perturbed[y][x] = std::clamp(block_orig[y][x] + block_delta[y][x], 0.0f, 255.0f);
+                        }
+                    }
+
+                    diff_resize_block(block_perturbed, block_resized, EOT_SCALES[k]);
+                    diff_jpeg_quant_block(block_resized, block_jpeg, EOT_QUALITIES[k]);
+
+                    for (int y = 0; y < 8; ++y) {
+                        for (int x = 0; x < 8; ++x) {
+                            float quant_loss = block_perturbed[y][x] - block_jpeg[y][x];
+                            float grad = (block_seed[y][x] + 1.15f * quant_loss >= 0.0f) ? 1.0f : -1.0f;
+                            block_delta[y][x] = std::clamp(block_delta[y][x] + 0.15f * grad, -bound_linf, bound_linf);
+                        }
                     }
                 }
+            } else {
+                for (int iter = 0; iter < 2; ++iter) {
+                    float block_perturbed[8][8];
+                    float block_jpeg[8][8];
 
-                diff_jpeg_q75_block(block_perturbed, block_jpeg);
+                    for (int y = 0; y < 8; ++y) {
+                        for (int x = 0; x < 8; ++x) {
+                            block_perturbed[y][x] = std::clamp(block_orig[y][x] + block_delta[y][x], 0.0f, 255.0f);
+                        }
+                    }
 
-                for (int y = 0; y < 8; ++y) {
-                    for (int x = 0; x < 8; ++x) {
-                        float quant_loss = block_perturbed[y][x] - block_jpeg[y][x];
-                        float grad = (block_seed[y][x] + 1.15f * quant_loss >= 0.0f) ? 1.0f : -1.0f;
-                        block_delta[y][x] = std::clamp(block_delta[y][x] + 0.65f * grad, -max_linf, max_linf);
+                    diff_jpeg_quant_block(block_perturbed, block_jpeg, 75);
+
+                    for (int y = 0; y < 8; ++y) {
+                        for (int x = 0; x < 8; ++x) {
+                            float quant_loss = block_perturbed[y][x] - block_jpeg[y][x];
+                            float grad = (block_seed[y][x] + 1.15f * quant_loss >= 0.0f) ? 1.0f : -1.0f;
+                            block_delta[y][x] = std::clamp(block_delta[y][x] + 0.65f * grad, -bound_linf, bound_linf);
+                        }
                     }
                 }
             }
@@ -894,7 +1029,7 @@ void native_armor_attack(
 
             float total_delta = delta_map[y * width + x] * alpha;
 
-            // Project strictly within [-max_delta_int, max_delta_int] to ensure L_inf <= 8/255
+            // Project strictly within [-max_delta_int, max_delta_int] to ensure L_inf constraint
             for (int c = 0; c < 3; ++c) {
                 int orig_val = src[idx + c];
                 int cand = static_cast<int>(std::round(orig_val + total_delta));
@@ -902,6 +1037,92 @@ void native_armor_attack(
                 dst[idx + c] = static_cast<uint8_t>(std::clamp(cand, 0, 255));
             }
             dst[idx + 3] = src[idx + 3];
+        }
+    }
+}
+
+void native_armor_attack(
+    const uint8_t* src,
+    uint8_t* dst,
+    int width,
+    int height,
+    float strength
+) {
+    native_armor_attack_eot(src, dst, width, height, strength, 8.0f, 0);
+}
+
+void native_inject_jpeg_quantization_artifacts(
+    const uint8_t* src,
+    uint8_t* dst,
+    int width,
+    int height,
+    int quality,
+    float strength
+) {
+    if (!src || !dst || width <= 0 || height <= 0) return;
+    const int total = width * height;
+    float s = std::clamp(strength, 0.0f, 1.0f);
+    if (s <= 0.001f) {
+        std::copy(src, src + total * 4, dst);
+        return;
+    }
+
+    int q = std::clamp(quality, 50, 95);
+
+    for (int by = 0; by < height; by += 8) {
+        for (int bx = 0; bx < width; bx += 8) {
+            for (int c = 0; c < 3; ++c) {
+                float in_block[8][8];
+                float out_block[8][8];
+
+                for (int y = 0; y < 8; ++y) {
+                    int py = std::min(by + y, height - 1);
+                    for (int x = 0; x < 8; ++x) {
+                        int px = std::min(bx + x, width - 1);
+                        in_block[y][x] = static_cast<float>(src[(py * width + px) * 4 + c]);
+                    }
+                }
+
+                diff_jpeg_quant_block(in_block, out_block, q);
+
+                for (int y = 0; y < 8; ++y) {
+                    int py = by + y;
+                    if (py >= height) continue;
+                    for (int x = 0; x < 8; ++x) {
+                        int px = bx + x;
+                        if (px >= width) continue;
+                        int idx = (py * width + px) * 4;
+
+                        // Synthetic 8x8 block boundary step simulation (Mandate 3):
+                        // Injects subtle JPEG grid boundary step (1-2 LSBs) across 8x8 block edges
+                        float boundary_step = 0.0f;
+                        int x8 = px & 7;
+                        int y8 = py & 7;
+                        if (x8 == 0 || x8 == 7) {
+                            boundary_step += (x8 == 0 ? 1.5f : -1.5f);
+                        }
+                        if (y8 == 0 || y8 == 7) {
+                            boundary_step += (y8 == 0 ? 1.5f : -1.5f);
+                        }
+
+                        float orig_val = static_cast<float>(src[idx + c]);
+                        float quant_val = out_block[y][x];
+                        float blended = (1.0f - 0.50f * s) * orig_val + (0.50f * s) * quant_val + (boundary_step * s);
+                        dst[idx + c] = static_cast<uint8_t>(std::clamp(std::round(blended), 0.0f, 255.0f));
+                    }
+                }
+            }
+
+            for (int y = 0; y < 8; ++y) {
+                int py = by + y;
+                if (py >= height) continue;
+                for (int x = 0; x < 8; ++x) {
+                    int px = bx + x;
+                    if (px >= width) continue;
+                    int idx = (py * width + px) * 4;
+                    dst[idx + 3] = src[idx + 3];
+                }
+            }
         }
     }
 }

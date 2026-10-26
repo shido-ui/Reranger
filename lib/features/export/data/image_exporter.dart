@@ -66,8 +66,9 @@ class ImageExporter {
       );
     }
 
-    // 2. Resolution-Independent Stealth: Apply ARMORAttackNode & SensorNoiseNode
-    // directly on the final target pixels AFTER any resizing to prevent noise dilution!
+    // 2. Resolution-Independent Stealth (Phase 5 Adversarial Robustness Pipeline):
+    // Pre-processing Bilateral Filter Sanitization (Mandate 1), EOT Robustness Loop (Mandate 2),
+    // and Sensor Noise directly on final target pixels after resizing to prevent noise dilution.
     if (config.realism > 0.0) {
       final workingRgba = Uint8List.fromList(
         workingImage.getBytes(order: img.ChannelOrder.rgba),
@@ -77,6 +78,9 @@ class ImageExporter {
         width: workingImage.width,
         height: workingImage.height,
         realism: config.realism,
+        maxLInf: config.maxLInf,
+        useEot: config.useEot,
+        useBilateralSanitization: config.bilateralSanitization,
       );
       workingImage = img.Image.fromBytes(
         width: workingImage.width,
@@ -84,6 +88,29 @@ class ImageExporter {
         bytes: stealthRgba.buffer,
         numChannels: 4,
       );
+
+      // Mandate 3: Shortcut Learning Mitigation (PNG Export)
+      // Since we export as PNG (to preserve the perturbation), inject synthetic JPEG
+      // quantization artifacts (8x8 DCT block boundaries) to simulate camera/social media pipeline.
+      if (config.format == ExportImageFormat.png &&
+          config.injectJpegArtifacts) {
+        final injectedRgba =
+            RenderGraphExecutor.injectSyntheticJpegQuantization(
+              rgbaBytes: Uint8List.fromList(
+                workingImage.getBytes(order: img.ChannelOrder.rgba),
+              ),
+              width: workingImage.width,
+              height: workingImage.height,
+              strength: config.realism,
+              quality: 85,
+            );
+        workingImage = img.Image.fromBytes(
+          width: workingImage.width,
+          height: workingImage.height,
+          bytes: injectedRgba.buffer,
+          numChannels: 4,
+        );
+      }
     }
 
     // 2. EXIF policy application

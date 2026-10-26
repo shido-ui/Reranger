@@ -53,18 +53,48 @@ void native_latent_sanitization(
     float strength
 );
 
+/// Applies a strong Bilateral Filter denoising pass for generative image sanitization (Mandate 1):
+/// Removes high-frequency generative artifacts (e.g. VAE upsampling noise) while preserving edges.
+void native_bilateral_filter_sanitization(
+    const uint8_t* src,
+    uint8_t* dst,
+    int width,
+    int height,
+    float spatial_sigma,
+    float range_sigma,
+    float strength
+);
+
 /// ARMOR++ Multi-Domain Universal Adversarial Perturbation (2026 framework):
-/// Entropy-regularized convex combination of 4 perturbation primitives:
-/// 1. Spatial Perturbation (CW-style sign-gradient bounded by L_inf <= 8/255)
-/// 2. Frequency-Domain Attack (JPEG Q75-hardened 8x8 DCT mid-frequency)
-/// 3. Saliency Modification (JSMA gradient/variance masking)
-/// 4. Block-Structured Transformations (BSR 8x8 patch modulation)
-/// Constrained by an L_inf norm of 8/255 (at strength = 1.0) with SSIM > 0.90.
+/// Entropy-regularized convex combination of 4 perturbation primitives with EOT robustness.
+/// Constrained by an L_inf norm of 16/255 (at strength = 1.0) with SSIM > 0.90.
 void native_armor_attack(
     const uint8_t* src,
     uint8_t* dst,
     int width,
     int height,
+    float strength
+);
+
+/// Enhanced ARMOR attack with explicit max_linf parameter and EOT simulation (Mandate 2):
+void native_armor_attack_eot(
+    const uint8_t* src,
+    uint8_t* dst,
+    int width,
+    int height,
+    float strength,
+    float max_linf,
+    int use_eot
+);
+
+/// Injects synthetic JPEG quantization artifacts and 8x8 DCT block boundaries (Mandate 3):
+/// Simulates camera/social media compression pipeline to defeat detector shortcut learning on PNG exports.
+void native_inject_jpeg_quantization_artifacts(
+    const uint8_t* src,
+    uint8_t* dst,
+    int width,
+    int height,
+    int quality,
     float strength
 );
 

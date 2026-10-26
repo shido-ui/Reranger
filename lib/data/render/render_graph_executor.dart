@@ -420,6 +420,8 @@ class RenderGraphExecutor {
         width: width,
         height: height,
         strength: node.strength,
+        maxLInf: 8.0,
+        useEot: false,
         isCancelled: isCancelled,
       );
     } else if (node is SensorNoiseNode) {
@@ -1164,33 +1166,59 @@ class RenderGraphExecutor {
     return basis;
   }
 
-  /// Applies Robust Stealth Engine V3:
-  /// 1. Latent Sanitization (strips DALL-E 3 high-frequency periodic checkerboard bias)
-  /// 2. ARMOR++ Multi-Domain Perturbation (CW spatial, JPEG Q75 DCT, JSMA saliency, BSR blocks)
-  ///    strictly constrained by L_inf <= 8/255 at realism = 1.0
-  /// 3. Sensor Noise & Chromatic Aberration
+  /// Applies Robust Stealth Engine (Phase 5 Adversarial Robustness Pipeline):
+  /// 1. Strong Bilateral Filter Pre-processing sanitization (Mandate 1)
+  /// 2. Selective Spectral Band-stop FFT Sanitization
+  /// 3. ARMOR++ Multi-Domain Perturbation with EOT Optimization (Mandate 2)
+  ///    10 random JPEG cycles (Q75-90) & 10 random resizes (0.8x-1.2x), strictly L_inf <= 16/255
+  /// 4. Camera Sensor Noise & Chromatic Aberration
   static Uint8List applyStealthEngineV2({
     required Uint8List rgbaBytes,
     required int width,
     required int height,
     required double realism,
+    double maxLInf = 16.0,
+    bool useEot = true,
+    bool useBilateralSanitization = true,
+    bool useLatentSanitization = true,
+    bool useSensorNoise = true,
     bool Function()? isCancelled,
   }) {
     if (realism <= 0.0 || width <= 0 || height <= 0) return rgbaBytes;
-    final sanitizedDst = _computeLatentSanitization(
-      input: rgbaBytes,
-      width: width,
-      height: height,
-      strength: realism,
-      isCancelled: isCancelled,
-    );
+
+    Uint8List working = rgbaBytes;
+    if (useBilateralSanitization) {
+      working = _computeBilateralSanitization(
+        input: working,
+        width: width,
+        height: height,
+        strength: realism,
+        isCancelled: isCancelled,
+      );
+    }
+
+    if (useLatentSanitization) {
+      working = _computeLatentSanitization(
+        input: working,
+        width: width,
+        height: height,
+        strength: realism,
+        isCancelled: isCancelled,
+      );
+    }
+
     final armorDst = _computeARMORAttack(
-      input: sanitizedDst,
+      input: working,
       width: width,
       height: height,
       strength: realism,
+      maxLInf: maxLInf,
+      useEot: useEot,
       isCancelled: isCancelled,
     );
+    if (!useSensorNoise) {
+      return armorDst;
+    }
     final sensorDst = _computeSensorNoise(
       input: armorDst,
       width: width,
@@ -1200,6 +1228,98 @@ class RenderGraphExecutor {
       isCancelled: isCancelled,
     );
     return sensorDst;
+  }
+
+  /// Strong Bilateral Filter Image Sanitization Pass (Mandate 1):
+  /// Removes high-frequency generative artifacts (e.g. VAE upsampling checkerboard/noise)
+  /// while strictly preserving sharp organic edges.
+  static Uint8List _computeBilateralSanitization({
+    required Uint8List input,
+    required int width,
+    required int height,
+    required double strength,
+    double spatialSigma = 2.5,
+    double rangeSigma = 30.0,
+    bool Function()? isCancelled,
+  }) {
+    final total = width * height;
+    final dst = Uint8List(total * 4);
+    if (total == 0) return dst;
+    final s = strength.clamp(0.0, 1.0);
+    if (s <= 0.001) {
+      dst.setAll(0, input);
+      return dst;
+    }
+
+    final twoSigmaSSq = 2.0 * spatialSigma * spatialSigma;
+    final twoSigmaRSq = 2.0 * rangeSigma * rangeSigma;
+
+    const int r = 2; // 5x5 window
+    final spatialWeights = List.generate(
+      5,
+      (dy) => List.generate(5, (dx) {
+        final d = (dx - r) * (dx - r) + (dy - r) * (dy - r);
+        return math.exp(-d / twoSigmaSSq);
+      }),
+    );
+
+    for (int y = 0; y < height; y++) {
+      if ((y & 15) == 0 && isCancelled != null && isCancelled()) {
+        throw const RenderGraphCancelledFailure('BilateralSanitization');
+      }
+      for (int x = 0; x < width; x++) {
+        final idx = (y * width + x) * 4;
+        final r0 = input[idx];
+        final g0 = input[idx + 1];
+        final b0 = input[idx + 2];
+
+        double sumR = 0.0;
+        double sumG = 0.0;
+        double sumB = 0.0;
+        double weightSum = 0.0;
+
+        for (int dy = -r; dy <= r; dy++) {
+          final py = (y + dy).clamp(0, height - 1);
+          final wRow = spatialWeights[dy + r];
+          for (int dx = -r; dx <= r; dx++) {
+            final px = (x + dx).clamp(0, width - 1);
+            final nIdx = (py * width + px) * 4;
+
+            final nr = input[nIdx];
+            final ng = input[nIdx + 1];
+            final nb = input[nIdx + 2];
+
+            final diffR = nr - r0;
+            final diffG = ng - g0;
+            final diffB = nb - b0;
+            final colorDistSq = diffR * diffR + diffG * diffG + diffB * diffB;
+
+            final w = wRow[dx + r] * math.exp(-colorDistSq / twoSigmaRSq);
+            sumR += nr * w;
+            sumG += ng * w;
+            sumB += nb * w;
+            weightSum += w;
+          }
+        }
+
+        if (weightSum > 0.0001) {
+          final invW = 1.0 / weightSum;
+          final filtR = sumR * invW;
+          final filtG = sumG * invW;
+          final filtB = sumB * invW;
+
+          dst[idx] = ((1.0 - s) * r0 + s * filtR).round().clamp(0, 255);
+          dst[idx + 1] = ((1.0 - s) * g0 + s * filtG).round().clamp(0, 255);
+          dst[idx + 2] = ((1.0 - s) * b0 + s * filtB).round().clamp(0, 255);
+        } else {
+          dst[idx] = r0;
+          dst[idx + 1] = g0;
+          dst[idx + 2] = b0;
+        }
+        dst[idx + 3] = input[idx + 3];
+      }
+    }
+    return dst;
   }
 
   /// Selective Spectral Sanitization via 2D FFT & Band-Stop Filter (Mandate 3):
@@ -1360,23 +1480,27 @@ class RenderGraphExecutor {
     return dst;
   }
 
-  // Differentiable JPEG Q75 Quantization Matrix
-  static const List<List<double>> _jpegQ75Quant = [
-    [8.0, 6.0, 5.0, 8.0, 12.0, 20.0, 26.0, 31.0],
-    [6.0, 6.0, 7.0, 10.0, 13.0, 29.0, 30.0, 28.0],
-    [7.0, 7.0, 8.0, 12.0, 20.0, 29.0, 35.0, 28.0],
-    [7.0, 9.0, 11.0, 15.0, 26.0, 44.0, 40.0, 31.0],
-    [9.0, 11.0, 19.0, 28.0, 34.0, 55.0, 52.0, 39.0],
-    [12.0, 18.0, 28.0, 32.0, 41.0, 52.0, 57.0, 46.0],
-    [25.0, 32.0, 39.0, 44.0, 52.0, 61.0, 60.0, 51.0],
-    [36.0, 46.0, 48.0, 49.0, 56.0, 50.0, 52.0, 50.0],
+  // Standard IJG JPEG 50 Luminance Quantization Matrix
+  static const List<List<double>> _jpegBaseQuant = [
+    [16.0, 11.0, 10.0, 16.0, 24.0, 40.0, 51.0, 61.0],
+    [12.0, 12.0, 14.0, 19.0, 26.0, 58.0, 60.0, 55.0],
+    [14.0, 13.0, 16.0, 24.0, 40.0, 57.0, 69.0, 56.0],
+    [14.0, 17.0, 22.0, 29.0, 51.0, 87.0, 80.0, 62.0],
+    [18.0, 22.0, 37.0, 56.0, 68.0, 109.0, 103.0, 77.0],
+    [24.0, 35.0, 55.0, 64.0, 81.0, 104.0, 113.0, 92.0],
+    [49.0, 64.0, 78.0, 87.0, 103.0, 121.0, 120.0, 101.0],
+    [72.0, 92.0, 95.0, 98.0, 112.0, 100.0, 103.0, 99.0],
   ];
 
-  static void _diffJpegQ75Block(
+  static void _diffJpegQuantBlock(
     List<List<double>> blockIn,
     List<List<double>> blockOut,
+    int quality,
   ) {
     const pi = math.pi;
+    final factor = (quality < 50)
+        ? (5000.0 / quality)
+        : (200.0 - 2.0 * quality);
     final dct = List.generate(8, (_) => List<double>.filled(8, 0.0));
 
     // 8x8 2D-DCT
@@ -1396,12 +1520,13 @@ class RenderGraphExecutor {
       }
     }
 
-    // Differentiable Q75 Quantization & De-quantization
+    // Dynamic Quantization & De-quantization
     final quantDct = List.generate(8, (_) => List<double>.filled(8, 0.0));
     for (int v = 0; v < 8; v++) {
       for (int u = 0; u < 8; u++) {
-        final q = _jpegQ75Quant[v][u];
-        quantDct[v][u] = (dct[v][u] / q).round() * q;
+        final baseQ = _jpegBaseQuant[v][u];
+        final q = ((baseQ * factor + 50.0) / 100.0).floor().clamp(1.0, 255.0);
+        quantDct[v][u] = ((dct[v][u] / q).round() * q).toDouble();
       }
     }
 
@@ -1423,15 +1548,68 @@ class RenderGraphExecutor {
     }
   }
 
-  /// ARMOR++ Multi-Domain Universal Adversarial Attack with JPEG-Robust I-FGSM (Mandate 3):
-  /// Entropy-regularized convex combination of 4 primitives, optimized via I-FGSM
-  /// through a differentiable JPEG Q75 layer to survive compression.
-  /// Strictly constrained to an L_inf norm of 8/255 at strength = 1.0.
+  static void _diffResizeBlock(
+    List<List<double>> blockIn,
+    List<List<double>> blockOut,
+    double scale,
+  ) {
+    for (int y = 0; y < 8; y++) {
+      final sy = (y - 3.5) * scale + 3.5;
+      final y0 = sy.floor().clamp(0, 7);
+      final y1 = (y0 + 1).clamp(0, 7);
+      final fy = sy - sy.floor();
+
+      for (int x = 0; x < 8; x++) {
+        final sx = (x - 3.5) * scale + 3.5;
+        final x0 = sx.floor().clamp(0, 7);
+        final x1 = (x0 + 1).clamp(0, 7);
+        final fx = sx - sx.floor();
+
+        final top = (1.0 - fx) * blockIn[y0][x0] + fx * blockIn[y0][x1];
+        final bot = (1.0 - fx) * blockIn[y1][x0] + fx * blockIn[y1][x1];
+        blockOut[y][x] = (1.0 - fy) * top + fy * bot;
+      }
+    }
+  }
+
+  // 10 random JPEG compression cycles (Quality 75-90) & 10 random resizes (0.8x-1.2x) for EOT
+  static const List<int> _eotQualities = [
+    75,
+    82,
+    78,
+    88,
+    80,
+    85,
+    77,
+    90,
+    83,
+    86,
+  ];
+  static const List<double> _eotScales = [
+    0.82,
+    1.15,
+    0.90,
+    1.08,
+    0.85,
+    1.20,
+    0.95,
+    1.05,
+    0.80,
+    1.12,
+  ];
+
+  /// ARMOR++ Multi-Domain Universal Adversarial Attack with EOT Optimization (Mandates 2):
+  /// Entropy-regularized convex combination of 4 primitives, optimized via Expectation Over
+  /// Transformation (EOT) across 10 random JPEG compression cycles (Quality 75-90) and
+  /// 10 random resizes (0.8x to 1.2x).
+  /// Strictly constrained to an L_inf norm of 16/255 at strength = 1.0 (adds subtle film grain).
   static Uint8List _computeARMORAttack({
     required Uint8List input,
     required int width,
     required int height,
     required double strength,
+    double maxLInf = 16.0,
+    bool useEot = true,
     bool Function()? isCancelled,
   }) {
     final total = width * height;
@@ -1444,8 +1622,8 @@ class RenderGraphExecutor {
       return dst;
     }
 
-    final maxLInf = 8.0 * eps;
-    final maxDeltaInt = maxLInf.round();
+    final boundLInf = (maxLInf > 0.0 ? maxLInf : 16.0) * eps;
+    final maxDeltaInt = boundLInf.round();
 
     final deltaMap = Float64List(total);
 
@@ -1519,74 +1697,163 @@ class RenderGraphExecutor {
                 wBsr * deltaBsr) /
             wSum;
 
-        deltaMap[y * width + x] = deltaMixed.clamp(-maxLInf, maxLInf);
+        deltaMap[y * width + x] = deltaMixed.clamp(-boundLInf, boundLInf);
       }
     }
 
-    // JPEG-Robust I-FGSM Optimization Loop (Quality 75):
-    for (int by = 0; by < height; by += 8) {
-      for (int bx = 0; bx < width; bx += 8) {
-        final blockOrig = List.generate(8, (_) => List<double>.filled(8, 0.0));
-        final blockDelta = List.generate(8, (_) => List<double>.filled(8, 0.0));
-        final blockSeed = List.generate(8, (_) => List<double>.filled(8, 0.0));
-
-        for (int y = 0; y < 8; y++) {
-          final py = math.min(by + y, height - 1);
-          for (int x = 0; x < 8; x++) {
-            final px = math.min(bx + x, width - 1);
-            final idx = (py * width + px) * 4;
-            blockOrig[y][x] =
-                0.299 * input[idx] +
-                0.587 * input[idx + 1] +
-                0.114 * input[idx + 2];
-            blockDelta[y][x] = deltaMap[py * width + px];
-            blockSeed[y][x] = blockDelta[y][x];
-          }
-        }
-
-        // I-FGSM iterations (2 steps)
-        for (int iter = 0; iter < 2; iter++) {
-          final blockPerturbed = List.generate(
+    if (useEot) {
+      // Mandate 2: Expectation Over Transformation (EOT) optimization loop
+      // 10 random JPEG compression cycles (Quality 75-90) & 10 random resizes (0.8x to 1.2x)
+      for (int by = 0; by < height; by += 8) {
+        for (int bx = 0; bx < width; bx += 8) {
+          final blockOrig = List.generate(
             8,
             (_) => List<double>.filled(8, 0.0),
           );
-          final blockJpeg = List.generate(
+          final blockDelta = List.generate(
+            8,
+            (_) => List<double>.filled(8, 0.0),
+          );
+          final blockSeed = List.generate(
             8,
             (_) => List<double>.filled(8, 0.0),
           );
 
           for (int y = 0; y < 8; y++) {
+            final py = math.min(by + y, height - 1);
             for (int x = 0; x < 8; x++) {
-              blockPerturbed[y][x] = (blockOrig[y][x] + blockDelta[y][x]).clamp(
-                0.0,
-                255.0,
-              );
+              final px = math.min(bx + x, width - 1);
+              final idx = (py * width + px) * 4;
+              blockOrig[y][x] =
+                  0.299 * input[idx] +
+                  0.587 * input[idx + 1] +
+                  0.114 * input[idx + 2];
+              blockDelta[y][x] = deltaMap[py * width + px];
+              blockSeed[y][x] = blockDelta[y][x];
             }
           }
 
-          _diffJpegQ75Block(blockPerturbed, blockJpeg);
+          for (int k = 0; k < 10; k++) {
+            final blockPerturbed = List.generate(
+              8,
+              (_) => List<double>.filled(8, 0.0),
+            );
+            final blockResized = List.generate(
+              8,
+              (_) => List<double>.filled(8, 0.0),
+            );
+            final blockJpeg = List.generate(
+              8,
+              (_) => List<double>.filled(8, 0.0),
+            );
+
+            for (int y = 0; y < 8; y++) {
+              for (int x = 0; x < 8; x++) {
+                blockPerturbed[y][x] = (blockOrig[y][x] + blockDelta[y][x])
+                    .clamp(0.0, 255.0);
+              }
+            }
+
+            _diffResizeBlock(blockPerturbed, blockResized, _eotScales[k]);
+            _diffJpegQuantBlock(blockResized, blockJpeg, _eotQualities[k]);
+
+            for (int y = 0; y < 8; y++) {
+              for (int x = 0; x < 8; x++) {
+                final quantLoss = blockPerturbed[y][x] - blockJpeg[y][x];
+                final grad = (blockSeed[y][x] + 1.15 * quantLoss >= 0.0)
+                    ? 1.0
+                    : -1.0;
+                blockDelta[y][x] = (blockDelta[y][x] + 0.15 * grad).clamp(
+                  -boundLInf,
+                  boundLInf,
+                );
+              }
+            }
+          }
 
           for (int y = 0; y < 8; y++) {
+            final py = by + y;
+            if (py >= height) continue;
             for (int x = 0; x < 8; x++) {
-              final quantLoss = blockPerturbed[y][x] - blockJpeg[y][x];
-              final grad = (blockSeed[y][x] + 1.15 * quantLoss >= 0.0)
-                  ? 1.0
-                  : -1.0;
-              blockDelta[y][x] = (blockDelta[y][x] + 0.65 * grad).clamp(
-                -maxLInf,
-                maxLInf,
-              );
+              final px = bx + x;
+              if (px >= width) continue;
+              deltaMap[py * width + px] = blockDelta[y][x];
             }
           }
         }
+      }
+    } else {
+      // Legacy 2-iteration Q75 loop
+      for (int by = 0; by < height; by += 8) {
+        for (int bx = 0; bx < width; bx += 8) {
+          final blockOrig = List.generate(
+            8,
+            (_) => List<double>.filled(8, 0.0),
+          );
+          final blockDelta = List.generate(
+            8,
+            (_) => List<double>.filled(8, 0.0),
+          );
+          final blockSeed = List.generate(
+            8,
+            (_) => List<double>.filled(8, 0.0),
+          );
 
-        for (int y = 0; y < 8; y++) {
-          final py = by + y;
-          if (py >= height) continue;
-          for (int x = 0; x < 8; x++) {
-            final px = bx + x;
-            if (px >= width) continue;
-            deltaMap[py * width + px] = blockDelta[y][x];
+          for (int y = 0; y < 8; y++) {
+            final py = math.min(by + y, height - 1);
+            for (int x = 0; x < 8; x++) {
+              final px = math.min(bx + x, width - 1);
+              final idx = (py * width + px) * 4;
+              blockOrig[y][x] =
+                  0.299 * input[idx] +
+                  0.587 * input[idx + 1] +
+                  0.114 * input[idx + 2];
+              blockDelta[y][x] = deltaMap[py * width + px];
+              blockSeed[y][x] = blockDelta[y][x];
+            }
+          }
+
+          for (int iter = 0; iter < 2; iter++) {
+            final blockPerturbed = List.generate(
+              8,
+              (_) => List<double>.filled(8, 0.0),
+            );
+            final blockJpeg = List.generate(
+              8,
+              (_) => List<double>.filled(8, 0.0),
+            );
+
+            for (int y = 0; y < 8; y++) {
+              for (int x = 0; x < 8; x++) {
+                blockPerturbed[y][x] = (blockOrig[y][x] + blockDelta[y][x])
+                    .clamp(0.0, 255.0);
+              }
+            }
+
+            _diffJpegQuantBlock(blockPerturbed, blockJpeg, 75);
+
+            for (int y = 0; y < 8; y++) {
+              for (int x = 0; x < 8; x++) {
+                final quantLoss = blockPerturbed[y][x] - blockJpeg[y][x];
+                final grad = (blockSeed[y][x] + 1.15 * quantLoss >= 0.0)
+                    ? 1.0
+                    : -1.0;
+                blockDelta[y][x] = (blockDelta[y][x] + 0.65 * grad).clamp(
+                  -boundLInf,
+                  boundLInf,
+                );
+              }
+            }
+          }
+
+          for (int y = 0; y < 8; y++) {
+            final py = by + y;
+            if (py >= height) continue;
+            for (int x = 0; x < 8; x++) {
+              final px = bx + x;
+              if (px >= width) continue;
+              deltaMap[py * width + px] = blockDelta[y][x];
+            }
           }
         }
       }
@@ -1610,6 +1877,88 @@ class RenderGraphExecutor {
           dst[idx + c] = cand.clamp(0, 255);
         }
         dst[idx + 3] = input[idx + 3];
+      }
+    }
+    return dst;
+  }
+
+  /// Injects synthetic JPEG quantization artifacts and 8x8 DCT block boundaries (Mandate 3):
+  /// Since images are exported as PNG to preserve perturbation fidelity, this pass injects
+  /// authentic 8x8 DCT block boundaries and quantization residuals (Q85 camera pipeline)
+  /// to defeat detector shortcut learning.
+  static Uint8List injectSyntheticJpegQuantization({
+    required Uint8List rgbaBytes,
+    required int width,
+    required int height,
+    double strength = 1.0,
+    int quality = 85,
+  }) {
+    final total = width * height;
+    final dst = Uint8List(total * 4);
+    if (total == 0) return dst;
+    final s = strength.clamp(0.0, 1.0);
+    if (s <= 0.001) {
+      dst.setAll(0, rgbaBytes);
+      return dst;
+    }
+
+    final q = quality.clamp(50, 95);
+
+    for (int by = 0; by < height; by += 8) {
+      for (int bx = 0; bx < width; bx += 8) {
+        for (int c = 0; c < 3; c++) {
+          final inBlock = List.generate(8, (_) => List<double>.filled(8, 0.0));
+          final outBlock = List.generate(8, (_) => List<double>.filled(8, 0.0));
+
+          for (int y = 0; y < 8; y++) {
+            final py = math.min(by + y, height - 1);
+            for (int x = 0; x < 8; x++) {
+              final px = math.min(bx + x, width - 1);
+              inBlock[y][x] = rgbaBytes[(py * width + px) * 4 + c].toDouble();
+            }
+          }
+
+          _diffJpegQuantBlock(inBlock, outBlock, q);
+
+          for (int y = 0; y < 8; y++) {
+            final py = by + y;
+            if (py >= height) continue;
+            for (int x = 0; x < 8; x++) {
+              final px = bx + x;
+              if (px >= width) continue;
+              final idx = (py * width + px) * 4;
+
+              double boundaryStep = 0.0;
+              final x8 = px & 7;
+              final y8 = py & 7;
+              if (x8 == 0 || x8 == 7) {
+                boundaryStep += (x8 == 0 ? 1.5 : -1.5);
+              }
+              if (y8 == 0 || y8 == 7) {
+                boundaryStep += (y8 == 0 ? 1.5 : -1.5);
+              }
+
+              final origVal = rgbaBytes[idx + c].toDouble();
+              final quantVal = outBlock[y][x];
+              final blended =
+                  (1.0 - 0.50 * s) * origVal +
+                  (0.50 * s) * quantVal +
+                  (boundaryStep * s);
+              dst[idx + c] = blended.round().clamp(0, 255);
+            }
+          }
+        }
+
+        for (int y = 0; y < 8; y++) {
+          final py = by + y;
+          if (py >= height) continue;
+          for (int x = 0; x < 8; x++) {
+            final px = bx + x;
+            if (px >= width) continue;
+            final idx = (py * width + px) * 4;
+            dst[idx + 3] = rgbaBytes[idx + 3];
+          }
+        }
       }
     }
     return dst;

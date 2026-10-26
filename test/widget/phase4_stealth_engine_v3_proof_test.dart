@@ -286,6 +286,9 @@ void main() {
           format: ExportImageFormat.png,
           scale: 1.0,
           realism: 1.0,
+          maxLInf: 8.0,
+          useEot: false,
+          injectJpegArtifacts: false,
         ),
       );
       final decoded100 = img.decodePng(export100.bytes)!;

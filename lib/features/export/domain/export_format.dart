@@ -46,6 +46,14 @@ class ExportConfiguration {
 
   final double realism; // 0.0 to 1.0 Robust Stealth Engine V2
 
+  // Phase 5: Adversarial Robustness Pipeline (Mandates 1-3)
+  final double maxLInf; // L_inf bound (Mandate 2: 16/255)
+  final bool useEot; // Expectation Over Transformation (Mandate 2)
+  final bool
+  bilateralSanitization; // Bilateral filter denoising pass (Mandate 1)
+  final bool
+  injectJpegArtifacts; // Synthetic JPEG quantization on PNG (Mandate 3)
+
   const ExportConfiguration({
     this.format = ExportImageFormat.png,
     this.quality = 90,
@@ -53,6 +61,10 @@ class ExportConfiguration {
     this.stripGpsMetadata = true,
     this.backgroundColorForOpaque = const [255, 255, 255],
     this.realism = 0.0,
+    this.maxLInf = 16.0,
+    this.useEot = true,
+    this.bilateralSanitization = true,
+    this.injectJpegArtifacts = true,
   }) : assert(
          quality >= 1 && quality <= 100,
          'Quality must be between 1 and 100',
@@ -61,6 +73,10 @@ class ExportConfiguration {
        assert(
          realism >= 0.0 && realism <= 1.0,
          'Realism must be between 0.0 and 1.0',
+       ),
+       assert(
+         maxLInf >= 0.0 && maxLInf <= 32.0,
+         'maxLInf must be between 0.0 and 32.0',
        );
 
   ExportConfiguration copyWith({
@@ -70,6 +86,10 @@ class ExportConfiguration {
     bool? stripGpsMetadata,
     List<int>? backgroundColorForOpaque,
     double? realism,
+    double? maxLInf,
+    bool? useEot,
+    bool? bilateralSanitization,
+    bool? injectJpegArtifacts,
   }) {
     return ExportConfiguration(
       format: format ?? this.format,
@@ -79,6 +99,11 @@ class ExportConfiguration {
       backgroundColorForOpaque:
           backgroundColorForOpaque ?? this.backgroundColorForOpaque,
       realism: realism ?? this.realism,
+      maxLInf: maxLInf ?? this.maxLInf,
+      useEot: useEot ?? this.useEot,
+      bilateralSanitization:
+          bilateralSanitization ?? this.bilateralSanitization,
+      injectJpegArtifacts: injectJpegArtifacts ?? this.injectJpegArtifacts,
     );
   }
 }

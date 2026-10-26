@@ -559,6 +559,134 @@ void test_watercolor_wash() {
     std::cout << "[PASS] test_watercolor_wash passed." << std::endl;
 }
 
+void test_bilateral_filter_sanitization() {
+    std::cout << "[TEST] Running test_bilateral_filter_sanitization..." << std::endl;
+    const int w = 32, h = 32;
+    std::vector<uint8_t> src(w * h * 4, 128);
+
+    // Add high-frequency synthetic generative noise (VAE checkerboard/noise pattern)
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            int off = (y * w + x) * 4;
+            int noise = ((x ^ y) & 1) ? 12 : -12;
+            src[off] = static_cast<uint8_t>(std::clamp(128 + noise, 0, 255));
+            src[off + 1] = static_cast<uint8_t>(std::clamp(128 + noise, 0, 255));
+            src[off + 2] = static_cast<uint8_t>(std::clamp(128 + noise, 0, 255));
+            src[off + 3] = 255;
+        }
+    }
+
+    // Add a strong vertical edge at x = 16
+    for (int y = 0; y < h; ++y) {
+        for (int x = 16; x < w; ++x) {
+            int off = (y * w + x) * 4;
+            src[off] = static_cast<uint8_t>(std::clamp(src[off] + 80, 0, 255));
+            src[off + 1] = static_cast<uint8_t>(std::clamp(src[off + 1] + 80, 0, 255));
+            src[off + 2] = static_cast<uint8_t>(std::clamp(src[off + 2] + 80, 0, 255));
+        }
+    }
+
+    std::vector<uint8_t> dst(w * h * 4, 0);
+    native_bilateral_filter_sanitization(src.data(), dst.data(), w, h, 2.5f, 30.0f, 1.0f);
+
+    // 1. Noise reduction in flat region: Check standard deviation around x in [4, 12]
+    double sum = 0.0, sum_sq = 0.0;
+    int count = 0;
+    for (int y = 4; y < h - 4; ++y) {
+        for (int x = 4; x < 12; ++x) {
+            int val = dst[(y * w + x) * 4];
+            sum += val;
+            sum_sq += val * val;
+            count++;
+        }
+    }
+    double mean = sum / count;
+    double var_after = (sum_sq / count) - (mean * mean);
+
+    double sum_orig = 0.0, sum_sq_orig = 0.0;
+    for (int y = 4; y < h - 4; ++y) {
+        for (int x = 4; x < 12; ++x) {
+            int val = src[(y * w + x) * 4];
+            sum_orig += val;
+            sum_sq_orig += val * val;
+        }
+    }
+    double mean_orig = sum_orig / count;
+    double var_before = (sum_sq_orig / count) - (mean_orig * mean_orig);
+
+    std::cout << "   [Bilateral] Variance before: " << var_before << ", after: " << var_after << std::endl;
+    assert(var_after < var_before * 0.5); // At least 50% noise reduction in flat region
+
+    // 2. Edge preservation: Gradient across x = 15 to x = 17 must be preserved
+    int edge_step_after = std::abs(static_cast<int>(dst[(16 * w + 17) * 4]) - static_cast<int>(dst[(16 * w + 14) * 4]));
+    std::cout << "   [Bilateral] Edge step preserved: " << edge_step_after << std::endl;
+    assert(edge_step_after > 65); // Strong edge preserved!
+    assert(dst[3] == 255); // Alpha preserved
+
+    std::cout << "[PASS] test_bilateral_filter_sanitization passed." << std::endl;
+}
+
+void test_eot_robustness_and_linf_16() {
+    std::cout << "[TEST] Running test_eot_robustness_and_linf_16..." << std::endl;
+    const int w = 64, h = 64;
+    std::vector<uint8_t> src(w * h * 4);
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            int off = (y * w + x) * 4;
+            src[off]     = static_cast<uint8_t>((x * 4) % 256);
+            src[off + 1] = static_cast<uint8_t>((y * 4) % 256);
+            src[off + 2] = static_cast<uint8_t>(((x + y) * 2) % 256);
+            src[off + 3] = 255;
+        }
+    }
+
+    std::vector<uint8_t> dst(w * h * 4, 0);
+    // Mandate 2: EOT simulation and L_inf constraint of 16/255 at strength = 1.0
+    native_armor_attack_eot(src.data(), dst.data(), w, h, 1.0f, 16.0f, 1);
+
+    // Verify not bitwise identical
+    assert(memcmp(src.data(), dst.data(), src.size()) != 0);
+
+    int max_delta = 0;
+    for (int i = 0; i < w * h * 4; i += 4) {
+        for (int c = 0; c < 3; ++c) {
+            int d = std::abs(static_cast<int>(dst[i + c]) - static_cast<int>(src[i + c]));
+            if (d > max_delta) max_delta = d;
+        }
+        assert(dst[i + 3] == 255); // Alpha untouched
+    }
+
+    std::cout << "   [L_inf] EOT ARMOR++ Max Delta: " << max_delta << "/255" << std::endl;
+    assert(max_delta <= 16); // Bounded strictly by L_inf 16/255
+    assert(max_delta > 8);  // Film grain necessary for robustness
+
+    double ssim = compute_ssim_c(src.data(), dst.data(), w, h);
+    std::cout << "   [SSIM] EOT ARMOR++ SSIM: " << ssim << std::endl;
+    assert(ssim > 0.90);
+
+    std::cout << "[PASS] test_eot_robustness_and_linf_16 passed." << std::endl;
+}
+
+void test_inject_jpeg_quantization_artifacts() {
+    std::cout << "[TEST] Running test_inject_jpeg_quantization_artifacts..." << std::endl;
+    const int w = 32, h = 32;
+    std::vector<uint8_t> src(w * h * 4, 140);
+    std::vector<uint8_t> dst(w * h * 4, 0);
+
+    native_inject_jpeg_quantization_artifacts(src.data(), dst.data(), w, h, 85, 1.0f);
+
+    // Verify 8x8 block boundary step
+    // Boundary pixel at x=7 vs x=8 should have boundary discontinuity
+    int p_boundary_left = dst[(4 * w + 7) * 4];
+    int p_boundary_right = dst[(4 * w + 8) * 4];
+    int step = std::abs(p_boundary_right - p_boundary_left);
+    std::cout << "   [Quantization Artifacts] 8x8 Boundary Step: " << step << std::endl;
+    assert(step >= 1); // Synthetic JPEG block boundary step injected!
+    assert(dst[3] == 140); // Alpha preserved
+
+    std::cout << "[PASS] test_inject_jpeg_quantization_artifacts passed." << std::endl;
+}
+
 int main() {
     std::cout << "=== Reranger Native C++ Classical Engine PoC Test Suite ===" << std::endl;
     test_grayscale();
@@ -572,6 +700,9 @@ int main() {
     test_armor_attack_and_ssim();
     test_sensor_noise_and_ssim();
     test_skeleton_vectorization();
+    test_bilateral_filter_sanitization();
+    test_eot_robustness_and_linf_16();
+    test_inject_jpeg_quantization_artifacts();
     std::cout << "=== ALL NATIVE C++ TESTS PASSED (100%) ===" << std::endl;
     return 0;
 }
