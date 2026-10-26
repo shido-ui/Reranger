@@ -64,6 +64,13 @@ void main() {
       }
       const artifactDir =
           '/root/.gemini/antigravity-cli/brain/131f6c3f-f2c2-4492-b5c5-d64035cddb16';
+      void saveArtifact(String name, Uint8List bytes) {
+        if (Directory(artifactDir).existsSync()) {
+          try {
+            File('$artifactDir/$name').writeAsBytesSync(bytes);
+          } catch (_) {}
+        }
+      }
 
       // 1. Save Clean Autodraw Canvas visual proof
       // Build a rendered visual image of the Autodraw viewport
@@ -168,8 +175,7 @@ void main() {
       final autodrawPng = Uint8List.fromList(img.encodePng(autodrawProof));
       File('docs/evidence/prompt-31/autodraw_no_overflow.png')
           .writeAsBytesSync(autodrawPng);
-      File('$artifactDir/autodraw_no_overflow.png')
-          .writeAsBytesSync(autodrawPng);
+      saveArtifact('autodraw_no_overflow.png', autodrawPng);
 
       // 2. Save Perfect Hair selection on Anime image using "Art (Color)" mode
       const animePath =
@@ -227,12 +233,11 @@ void main() {
       final animeProofPng = Uint8List.fromList(img.encodePng(composite));
       File('docs/evidence/prompt-31/anime_hair_selection_art_mode.png')
           .writeAsBytesSync(animeProofPng);
-      File('$artifactDir/anime_hair_selection_art_mode.png')
-          .writeAsBytesSync(animeProofPng);
+      saveArtifact('anime_hair_selection_art_mode.png', animeProofPng);
 
       // Also copy raw anime source for comparison
       final animeRawPng = Uint8List.fromList(img.encodePng(animeDecoded));
-      File('$artifactDir/anime_source.png').writeAsBytesSync(animeRawPng);
+      saveArtifact('anime_source.png', animeRawPng);
     },
   );
 }
