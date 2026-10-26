@@ -1259,11 +1259,11 @@ class ExpandedPresets {
     version: 1,
     parameters: const [
       PresetParameter(
-        id: 'vignetteFalloff',
-        label: 'Cinematic Vignette',
+        id: 'splitToneStrength',
+        label: 'Grade Intensity',
         min: 0.1,
-        max: 0.6,
-        defaultValue: 0.28,
+        max: 1.0,
+        defaultValue: 1.0,
         step: 0.05,
       ),
       PresetParameter(
@@ -1271,7 +1271,7 @@ class ExpandedPresets {
         label: '35mm Film Grain',
         min: 0.0,
         max: 0.25,
-        defaultValue: 0.08,
+        defaultValue: 0.04,
         step: 0.01,
       ),
     ],
@@ -1279,8 +1279,8 @@ class ExpandedPresets {
     thumbnailProvenance: 'Synthetically generated from standard Reranger benchmark fixture via IsolateSceneMapGenerator',
     accessibleLabel: 'Cinematic Teal & Orange Hollywood film style preset',
     buildGraph: (sourceHash, sourceWidth, sourceHeight, params) {
-      final vignette = params['vignetteFalloff'] ?? 0.28;
-      final grain = params['filmGrain'] ?? 0.08;
+      final strength = (params['splitToneStrength'] as num?)?.toDouble() ?? 1.0;
+      final grain = (params['filmGrain'] as num?)?.toDouble() ?? 0.04;
 
       return RenderGraph(
         id: 'graph_cinematic_teal_orange',
@@ -1291,31 +1291,22 @@ class ExpandedPresets {
             sourceWidth: sourceWidth,
             sourceHeight: sourceHeight,
           ),
-          'duo_1': DuoToneNode(
-            id: 'duo_1',
+          'vib_1': AdaptiveVibrancyNode(
+            id: 'vib_1',
             inputNodeId: 'src_0',
-            shadowR: 12,
-            shadowG: 40,
-            shadowB: 51,
-            highlightR: 255,
-            highlightG: 168,
-            highlightB: 82,
-            vignetteFalloff: vignette,
+            vibrancy: 0.35 * strength,
+            contrast: 0.25 * strength,
+            splitTone: 'cinematic',
+            splitToneStrength: strength,
           ),
           'grain_2': GrainOverlayNode(
             id: 'grain_2',
-            inputNodeId: 'duo_1',
+            inputNodeId: 'vib_1',
             intensity: grain,
             seed: 401,
           ),
-          'vib_out': AdaptiveVibrancyNode(
-            id: 'vib_out',
-            inputNodeId: 'grain_2',
-            vibrancy: 0.25,
-            contrast: 0.15,
-          ),
         },
-        outputNodeId: 'vib_out',
+        outputNodeId: 'grain_2',
       );
     },
   );

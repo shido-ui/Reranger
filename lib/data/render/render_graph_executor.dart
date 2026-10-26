@@ -540,6 +540,8 @@ class RenderGraphExecutor {
         vibrancy: node.vibrancy,
         contrast: node.contrast,
         preserveAlpha: node.preserveAlpha,
+        splitTone: node.splitTone,
+        splitToneStrength: node.splitToneStrength,
         isCancelled: isCancelled,
       );
     } else {
@@ -686,59 +688,44 @@ class RenderGraphExecutor {
     return dst;
   }
 
-  /// 2D coherent noise (smoothstep-interpolated value noise) for natural paper/film grain.
-  static double _coherentNoise2D(double x, double y, int seed) {
-    final fx = x / 2.5;
-    final fy = y / 2.5;
+  /// True 2D Perlin gradient noise with quintic Hermite interpolation: 6t^5 - 15t^4 + 10t^3.
+  /// Eliminates grid artifacts and produces silky, organic paper tooth / analog film grain.
+  static double _perlinNoise2D(double x, double y, int seed) {
+    // Frequency scale for natural paper tooth
+    final fx = x / 3.0;
+    final fy = y / 3.0;
     final x0 = fx.floor();
     final y0 = fy.floor();
     final x1 = x0 + 1;
     final y1 = y0 + 1;
 
-    final tx = fx - x0;
-    final ty = fy - y0;
-    final sx = tx * tx * (3.0 - 2.0 * tx);
-    final sy = ty * ty * (3.0 - 2.0 * ty);
+    final dx0 = fx - x0;
+    final dy0 = fy - y0;
+    final dx1 = dx0 - 1.0;
+    final dy1 = dy0 - 1.0;
 
-    final v00 = _hash2DToNorm(x0, y0, seed);
-    final v10 = _hash2DToNorm(x1, y0, seed);
-    final v01 = _hash2DToNorm(x0, y1, seed);
-    final v11 = _hash2DToNorm(x1, y1, seed);
+    // Quintic Hermite interpolant: 6t^5 - 15t^4 + 10t^3
+    final sx = dx0 * dx0 * dx0 * (dx0 * (dx0 * 6.0 - 15.0) + 10.0);
+    final sy = dy0 * dy0 * dy0 * (dy0 * (dy0 * 6.0 - 15.0) + 10.0);
 
-    final n1 =
-        (1.0 - sx) * (1.0 - sy) * v00 +
-        sx * (1.0 - sy) * v10 +
-        (1.0 - sx) * sy * v01 +
-        sx * sy * v11;
+    // Gradient dot products at 4 corners
+    final g00 = _gradDot(x0, y0, seed, dx0, dy0);
+    final g10 = _gradDot(x1, y0, seed, dx1, dy0);
+    final g01 = _gradDot(x0, y1, seed, dx0, dy1);
+    final g11 = _gradDot(x1, y1, seed, dx1, dy1);
 
-    // Subtle micro-octave for fine analog paper tooth
-    final fx2 = x / 1.25;
-    final fy2 = y / 1.25;
-    final x0_2 = fx2.floor();
-    final y0_2 = fy2.floor();
-    final tx2 = fx2 - x0_2;
-    final ty2 = fy2 - y0_2;
-    final sx2 = tx2 * tx2 * (3.0 - 2.0 * tx2);
-    final sy2 = ty2 * ty2 * (3.0 - 2.0 * ty2);
+    final nx0 = g00 + sx * (g10 - g00);
+    final nx1 = g01 + sx * (g11 - g01);
+    final n = nx0 + sy * (nx1 - nx0);
 
-    final w00 = _hash2DToNorm(x0_2, y0_2, seed + 101);
-    final w10 = _hash2DToNorm(x0_2 + 1, y0_2, seed + 101);
-    final w01 = _hash2DToNorm(x0_2, y0_2 + 1, seed + 101);
-    final w11 = _hash2DToNorm(x0_2 + 1, y0_2 + 1, seed + 101);
-
-    final n2 =
-        (1.0 - sx2) * (1.0 - sy2) * w00 +
-        sx2 * (1.0 - sy2) * w10 +
-        (1.0 - sx2) * sy2 * w01 +
-        sx2 * sy2 * w11;
-
-    return 0.75 * n1 + 0.25 * n2;
+    return n.clamp(-1.0, 1.0);
   }
 
-  static double _hash2DToNorm(int x, int y, int seed) {
-    int h = (x * 374761393 + y * 668265263 + seed * 1013904223) & 0x7FFFFFFF;
+  static double _gradDot(int ix, int iy, int seed, double dx, double dy) {
+    int h = (ix * 374761393 + iy * 668265263 + seed * 1013904223) & 0x7FFFFFFF;
     h = (h ^ (h >> 13)) * 1274126177 & 0x7FFFFFFF;
-    return ((h & 0xFFFF) / 32767.5) - 1.0; // [-1.0, 1.0]
+    final angle = ((h & 0xFF) / 256.0) * (2.0 * math.pi);
+    return math.cos(angle) * dx + math.sin(angle) * dy;
   }
 
   /// Photographically accurate Soft Light blend: f(A, B) = (1 - 2B)A^2 + 2BA
@@ -758,8 +745,8 @@ class RenderGraphExecutor {
   ]) {
     final total = w * h;
     final dst = Uint8List(total * 4);
-    // Surgical Fix (BUG 1): Scale grainIntensity into range [0.02, 0.10]
-    final effIntensity = (intensity * 0.35).clamp(0.01, 0.12);
+    // Strictly cap opacity to max 0.08 (Mandate 2) to eliminate TV static
+    final effIntensity = (intensity * 0.25).clamp(0.01, 0.08);
 
     for (int y = 0; y < h; y++) {
       if ((y & 15) == 0 && isCancelled != null && isCancelled()) {
@@ -777,17 +764,15 @@ class RenderGraphExecutor {
           continue;
         }
 
-        // Generate coherent noise & blend via SoftLight (prevents TV static)
-        final n = _coherentNoise2D(x.toDouble(), y.toDouble(), seed);
-        final blendNorm = 0.5 + 0.5 * n * effIntensity;
+        // Generate Perlin gradient noise & blend via SoftLight (prevents TV static)
+        final n = _perlinNoise2D(x.toDouble(), y.toDouble(), seed);
+        final blendNorm = (0.5 + 0.5 * n * effIntensity).clamp(0.0, 1.0);
         final alphaFactor = a / 255.0;
 
         for (int c = 0; c < 3; c++) {
           final rawNorm = src[off + c] / 255.0;
-          final baseNorm = rawNorm.clamp(0.04, 0.96);
-          final soft = _blendSoftLight(baseNorm, blendNorm);
-          final textured = rawNorm + (soft - baseNorm);
-          final blended = rawNorm + (textured - rawNorm) * alphaFactor;
+          final soft = _blendSoftLight(rawNorm, blendNorm);
+          final blended = rawNorm + (soft - rawNorm) * alphaFactor;
           dst[off + c] = (blended * 255.0).round().clamp(0, 255);
         }
         dst[off + 3] = a;
@@ -1790,8 +1775,8 @@ class RenderGraphExecutor {
         b *= edgeDarken;
 
         // Surgical Fix (BUG 1): Coherent 2D paper grain noise blended with SoftLight
-        final noise = _coherentNoise2D(x.toDouble(), y.toDouble(), seed);
-        final toothBlend = 0.5 + 0.5 * noise * effTooth;
+        final noise = _perlinNoise2D(x.toDouble(), y.toDouble(), seed);
+        final toothBlend = (0.5 + 0.5 * noise * effTooth).clamp(0.0, 1.0);
 
         final rSoft = _blendSoftLight((r / 255.0).clamp(0.0, 1.0), toothBlend);
         final gSoft = _blendSoftLight((g / 255.0).clamp(0.0, 1.0), toothBlend);
@@ -1891,6 +1876,8 @@ class RenderGraphExecutor {
     required double vibrancy,
     required double contrast,
     required bool preserveAlpha,
+    String? splitTone,
+    double splitToneStrength = 1.0,
     bool Function()? isCancelled,
   }) {
     final total = width * height;
@@ -1934,12 +1921,11 @@ class RenderGraphExecutor {
         double labA = 500.0 * (fx - fy);
         double labB = 200.0 * (fy - fz);
 
-        // Adaptive contrast / S-curve on L*
+        // Continuous float32 S-curve on L* to eliminate color banding (Mandate 1)
         if (contrast.abs() > 1e-4) {
-          final lNorm = labL / 100.0;
-          final lAdj =
-              lNorm +
-              contrast * (lNorm - 0.5) * (1.0 - (lNorm - 0.5).abs() * 2.0);
+          final lNorm = (labL / 100.0).clamp(0.0, 1.0);
+          final sCurve = lNorm * lNorm * (3.0 - 2.0 * lNorm);
+          final lAdj = lNorm + contrast * (sCurve - lNorm);
           labL = lAdj.clamp(0.0, 1.0) * 100.0;
         }
 
@@ -1954,7 +1940,99 @@ class RenderGraphExecutor {
           }
         }
 
-        // Convert back to sRGB
+        // True Split-Toning in CIELAB (Mandate 1)
+        if (splitTone != null && splitToneStrength > 1e-4) {
+          final lNorm = (labL / 100.0).clamp(0.0, 1.0);
+          final effStrength = splitToneStrength.clamp(0.0, 1.0);
+
+          // Biological human skin tone locus in CIELAB:
+          // Moderate positive a* and b* with warm yellow-red hue ratio
+          bool isSkinTone = false;
+          if (labA > 5.0 && labA < 34.0 && labB > 6.0 && labB < 40.0) {
+            final ratio = labB / labA;
+            if (ratio >= 0.8 && ratio <= 2.6) {
+              isSkinTone = true;
+            }
+          }
+
+          // Strict tonal zoning:
+          // Shadows: L* < 0.30
+          // Highlights: L* > 0.70
+          // Midtones (0.30 <= L* <= 0.70): Strictly neutral (0.0 weight) to preserve natural skin tones
+          double shadowWeight = 0.0;
+          if (lNorm < 0.30) {
+            final t = (0.30 - lNorm) / 0.30;
+            shadowWeight = t * t * (3.0 - 2.0 * t);
+            if (isSkinTone) {
+              shadowWeight *= 0.15; // Inviolable protection against cyan skin
+            }
+          }
+
+          double highlightWeight = 0.0;
+          if (lNorm > 0.70) {
+            final t = (lNorm - 0.70) / 0.30;
+            highlightWeight = t * t * (3.0 - 2.0 * t);
+          }
+
+          double shadowShiftA = 0.0;
+          double shadowShiftB = 0.0;
+          double highlightShiftA = 0.0;
+          double highlightShiftB = 0.0;
+
+          switch (splitTone) {
+            case 'cinematic':
+              // Shadows -> Teal (Cyan)
+              shadowShiftA = -18.0;
+              shadowShiftB = -22.0;
+              // Highlights -> Orange (Warm Amber)
+              highlightShiftA = 22.0;
+              highlightShiftB = 38.0;
+              break;
+            case 'ethereal':
+              // Shadows -> Soft Lavender / Violet
+              shadowShiftA = 12.0;
+              shadowShiftB = -16.0;
+              // Highlights -> Delicate Rose / Peach
+              highlightShiftA = 16.0;
+              highlightShiftB = 10.0;
+              break;
+            case 'vintage':
+              // Shadows -> Warm Sepia / Chocolate
+              shadowShiftA = 8.0;
+              shadowShiftB = 16.0;
+              // Highlights -> Warm Ivory Cream
+              highlightShiftA = -2.0;
+              highlightShiftB = 24.0;
+              break;
+            case 'cyberpunk':
+              // Shadows -> Electric Violet / Indigo
+              shadowShiftA = 26.0;
+              shadowShiftB = -32.0;
+              // Highlights -> Neon Cyan
+              highlightShiftA = -32.0;
+              highlightShiftB = -10.0;
+              break;
+            case 'pastel':
+              // Shadows -> Soft Periwinkle
+              shadowShiftA = -6.0;
+              shadowShiftB = -18.0;
+              // Highlights -> Champagne Blush
+              highlightShiftA = 12.0;
+              highlightShiftB = 12.0;
+              break;
+          }
+
+          labA +=
+              (shadowWeight * shadowShiftA +
+                  highlightWeight * highlightShiftA) *
+              effStrength;
+          labB +=
+              (shadowWeight * shadowShiftB +
+                  highlightWeight * highlightShiftB) *
+              effStrength;
+        }
+
+        // Convert back to sRGB in continuous float64 until final rounding
         final outFy = (labL + 16.0) / 116.0;
         final outFx = outFy + labA / 500.0;
         final outFz = outFy - labB / 200.0;

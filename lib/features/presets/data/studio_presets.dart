@@ -1,7 +1,6 @@
 import '../../../domain/presets/preset_definition.dart';
 import '../../../domain/presets/preset_parameter.dart';
 import '../../../domain/recipes/adaptive_vibrancy_node.dart';
-import '../../../domain/recipes/blend_composite_node.dart';
 import '../../../domain/recipes/render_graph.dart';
 import '../../../domain/recipes/render_graph_node.dart';
 import '../../../domain/recipes/style_render_nodes.dart';
@@ -75,34 +74,19 @@ class StudioPresets {
           'vib_1': AdaptiveVibrancyNode(
             id: 'vib_1',
             inputNodeId: 'src_0',
-            vibrancy: 0.40 * strength,
+            vibrancy: 0.35 * strength,
             contrast: 0.25 * strength,
+            splitTone: 'cinematic',
+            splitToneStrength: strength,
           ),
-          'duo_2': DuoToneNode(
-            id: 'duo_2',
-            inputNodeId: 'src_0',
-            shadowR: 10,
-            shadowG: 60,
-            shadowB: 85,
-            highlightR: 255,
-            highlightG: 185,
-            highlightB: 120,
-          ),
-          'blend_3': BlendCompositeNode(
-            id: 'blend_3',
-            baseInputNodeId: 'vib_1',
-            topInputNodeId: 'duo_2',
-            blendMode: BlendCompositeModes.overlay,
-            opacity: 0.45 * strength,
-          ),
-          'grain_4': GrainOverlayNode(
-            id: 'grain_4',
-            inputNodeId: 'blend_3',
+          'grain_2': GrainOverlayNode(
+            id: 'grain_2',
+            inputNodeId: 'vib_1',
             intensity: 0.04 * strength,
             seed: 101,
           ),
         },
-        outputNodeId: 'grain_4',
+        outputNodeId: 'grain_2',
       );
     },
   );
@@ -144,33 +128,18 @@ class StudioPresets {
             id: 'vib_1',
             inputNodeId: 'src_0',
             vibrancy: 0.20 * strength,
-            contrast: 0.05 * strength,
+            contrast: 0.10 * strength,
+            splitTone: 'ethereal',
+            splitToneStrength: strength,
           ),
-          'duo_2': DuoToneNode(
-            id: 'duo_2',
-            inputNodeId: 'src_0',
-            shadowR: 40,
-            shadowG: 30,
-            shadowB: 45,
-            highlightR: 255,
-            highlightG: 242,
-            highlightB: 238,
-          ),
-          'blend_3': BlendCompositeNode(
-            id: 'blend_3',
-            baseInputNodeId: 'vib_1',
-            topInputNodeId: 'duo_2',
-            blendMode: BlendCompositeModes.softLight,
-            opacity: 0.40 * strength,
-          ),
-          'grain_4': GrainOverlayNode(
-            id: 'grain_4',
-            inputNodeId: 'blend_3',
+          'grain_2': GrainOverlayNode(
+            id: 'grain_2',
+            inputNodeId: 'vib_1',
             intensity: 0.03 * strength,
             seed: 202,
           ),
         },
-        outputNodeId: 'grain_4',
+        outputNodeId: 'grain_2',
       );
     },
   );
@@ -211,34 +180,19 @@ class StudioPresets {
           'vib_1': AdaptiveVibrancyNode(
             id: 'vib_1',
             inputNodeId: 'src_0',
-            vibrancy: 0.18 * strength,
+            vibrancy: 0.20 * strength,
             contrast: 0.22 * strength,
+            splitTone: 'vintage',
+            splitToneStrength: strength,
           ),
-          'duo_2': DuoToneNode(
-            id: 'duo_2',
-            inputNodeId: 'src_0',
-            shadowR: 30,
-            shadowG: 35,
-            shadowB: 40,
-            highlightR: 252,
-            highlightG: 242,
-            highlightB: 220,
-          ),
-          'blend_3': BlendCompositeNode(
-            id: 'blend_3',
-            baseInputNodeId: 'vib_1',
-            topInputNodeId: 'duo_2',
-            blendMode: BlendCompositeModes.overlay,
-            opacity: 0.35 * strength,
-          ),
-          'grain_4': GrainOverlayNode(
-            id: 'grain_4',
-            inputNodeId: 'blend_3',
-            intensity: 0.05 * strength,
+          'grain_2': GrainOverlayNode(
+            id: 'grain_2',
+            inputNodeId: 'vib_1',
+            intensity: 0.04 * strength,
             seed: 303,
           ),
         },
-        outputNodeId: 'grain_4',
+        outputNodeId: 'grain_2',
       );
     },
   );
@@ -280,33 +234,18 @@ class StudioPresets {
             id: 'vib_1',
             inputNodeId: 'src_0',
             vibrancy: 0.65 * strength,
-            contrast: 0.40 * strength,
+            contrast: 0.35 * strength,
+            splitTone: 'cyberpunk',
+            splitToneStrength: strength,
           ),
-          'duo_2': DuoToneNode(
-            id: 'duo_2',
-            inputNodeId: 'src_0',
-            shadowR: 20,
-            shadowG: 5,
-            shadowB: 45,
-            highlightR: 0,
-            highlightG: 255,
-            highlightB: 235,
-          ),
-          'blend_3': BlendCompositeNode(
-            id: 'blend_3',
-            baseInputNodeId: 'vib_1',
-            topInputNodeId: 'duo_2',
-            blendMode: BlendCompositeModes.screen,
-            opacity: 0.28 * strength,
-          ),
-          'grain_4': GrainOverlayNode(
-            id: 'grain_4',
-            inputNodeId: 'blend_3',
+          'grain_2': GrainOverlayNode(
+            id: 'grain_2',
+            inputNodeId: 'vib_1',
             intensity: 0.03 * strength,
             seed: 404,
           ),
         },
-        outputNodeId: 'grain_4',
+        outputNodeId: 'grain_2',
       );
     },
   );
@@ -347,34 +286,19 @@ class StudioPresets {
           'vib_1': AdaptiveVibrancyNode(
             id: 'vib_1',
             inputNodeId: 'src_0',
-            vibrancy: 0.28 * strength,
-            contrast: 0.02 * strength,
+            vibrancy: 0.25 * strength,
+            contrast: 0.08 * strength,
+            splitTone: 'pastel',
+            splitToneStrength: strength,
           ),
-          'duo_2': DuoToneNode(
-            id: 'duo_2',
-            inputNodeId: 'src_0',
-            shadowR: 165,
-            shadowG: 185,
-            shadowB: 220,
-            highlightR: 255,
-            highlightG: 215,
-            highlightB: 225,
-          ),
-          'blend_3': BlendCompositeNode(
-            id: 'blend_3',
-            baseInputNodeId: 'vib_1',
-            topInputNodeId: 'duo_2',
-            blendMode: BlendCompositeModes.softLight,
-            opacity: 0.50 * strength,
-          ),
-          'grain_4': GrainOverlayNode(
-            id: 'grain_4',
-            inputNodeId: 'blend_3',
+          'grain_2': GrainOverlayNode(
+            id: 'grain_2',
+            inputNodeId: 'vib_1',
             intensity: 0.03 * strength,
             seed: 505,
           ),
         },
-        outputNodeId: 'grain_4',
+        outputNodeId: 'grain_2',
       );
     },
   );

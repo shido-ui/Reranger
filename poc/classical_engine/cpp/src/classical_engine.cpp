@@ -125,7 +125,7 @@ static inline float blend_soft_light(float base_norm, float blend_norm) {
 
 void native_grain_overlay(const uint8_t* src, uint8_t* dst, int width, int height, uint32_t seed, float intensity) {
     if (!src || !dst || width <= 0 || height <= 0) return;
-    const float eff_intensity = std::clamp(intensity * 0.35f, 0.01f, 0.12f);
+    const float eff_intensity = std::clamp(intensity * 0.25f, 0.01f, 0.08f);
 
     for (int y = 0; y < height; ++y) {
         const int row_off = y * width;

@@ -12,6 +12,9 @@ class AdaptiveVibrancyNode extends RenderGraphNode {
   final double vibrancy;
   final double contrast;
   final bool preserveAlpha;
+  final String?
+  splitTone; // 'cinematic', 'ethereal', 'vintage', 'cyberpunk', 'pastel'
+  final double splitToneStrength;
 
   AdaptiveVibrancyNode({
     required super.id,
@@ -19,6 +22,8 @@ class AdaptiveVibrancyNode extends RenderGraphNode {
     this.vibrancy = 0.35,
     this.contrast = 0.20,
     this.preserveAlpha = true,
+    this.splitTone,
+    this.splitToneStrength = 1.0,
   }) : super(
          type: nodeType,
          version: currentVersion,
@@ -27,6 +32,8 @@ class AdaptiveVibrancyNode extends RenderGraphNode {
            'vibrancy': vibrancy,
            'contrast': contrast,
            'preserveAlpha': preserveAlpha,
+           'splitTone': ?splitTone,
+           'splitToneStrength': splitToneStrength,
          },
        );
 
@@ -40,6 +47,9 @@ class AdaptiveVibrancyNode extends RenderGraphNode {
       vibrancy: (params['vibrancy'] as num?)?.toDouble() ?? 0.35,
       contrast: (params['contrast'] as num?)?.toDouble() ?? 0.20,
       preserveAlpha: params['preserveAlpha'] as bool? ?? true,
+      splitTone: params['splitTone'] as String?,
+      splitToneStrength:
+          (params['splitToneStrength'] as num?)?.toDouble() ?? 1.0,
     );
   }
 
@@ -59,6 +69,31 @@ class AdaptiveVibrancyNode extends RenderGraphNode {
         parameterName: 'contrast',
         actualValue: contrast,
         expectedCriteria: '0.0 <= contrast <= 1.0',
+      );
+    }
+    if (splitTone != null) {
+      const validModes = {
+        'cinematic',
+        'ethereal',
+        'vintage',
+        'cyberpunk',
+        'pastel',
+      };
+      if (!validModes.contains(splitTone)) {
+        throw RenderInvalidParametersFailure(
+          nodeId: id,
+          parameterName: 'splitTone',
+          actualValue: splitTone,
+          expectedCriteria: 'Must be one of $validModes',
+        );
+      }
+    }
+    if (splitToneStrength < 0.0 || splitToneStrength > 2.0) {
+      throw RenderInvalidParametersFailure(
+        nodeId: id,
+        parameterName: 'splitToneStrength',
+        actualValue: splitToneStrength,
+        expectedCriteria: '0.0 <= splitToneStrength <= 2.0',
       );
     }
     if (inputNodeIds.isEmpty) {
