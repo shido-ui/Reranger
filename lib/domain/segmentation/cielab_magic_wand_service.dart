@@ -50,7 +50,7 @@ class CielabMagicWandService {
       lum[i] = (0.299 * r + 0.587 * g + 0.114 * b);
     }
 
-    final isEdge = Uint8List(total);
+    final rawEdge = Uint8List(total);
     for (int y = 0; y < height; y++) {
       final ym1 = math.max(0, y - 1);
       final yp1 = math.min(height - 1, y + 1);
@@ -60,19 +60,53 @@ class CielabMagicWandService {
         final xp1 = math.min(width - 1, x + 1);
         final idx = rowOff + x;
 
-        // Dark ink line in anime / line art
-        if (lum[idx] < 0.18) {
-          isEdge[idx] = 1;
-          continue;
-        }
+        // Full 3x3 Sobel Operator
+        final p00 = lum[ym1 * width + xm1];
+        final p01 = lum[ym1 * width + x];
+        final p02 = lum[ym1 * width + xp1];
 
-        final gx = lum[rowOff + xp1] - lum[rowOff + xm1];
-        final gy = lum[yp1 * width + x] - lum[ym1 * width + x];
-        if (math.sqrt(gx * gx + gy * gy) > 0.16) {
-          isEdge[idx] = 1;
+        final p10 = lum[rowOff + xm1];
+        final p12 = lum[rowOff + xp1];
+
+        final p20 = lum[yp1 * width + xm1];
+        final p21 = lum[yp1 * width + x];
+        final p22 = lum[yp1 * width + xp1];
+
+        final gx =
+            (-1.0 * p00 + 1.0 * p02) +
+            (-2.0 * p10 + 2.0 * p12) +
+            (-1.0 * p20 + 1.0 * p22);
+        final gy =
+            (-1.0 * p00 - 2.0 * p01 - 1.0 * p02) +
+            (1.0 * p20 + 2.0 * p21 + 1.0 * p22);
+
+        final sobelMag = math.sqrt(gx * gx + gy * gy) / 8.0;
+        if (lum[idx] < 0.20 || (sobelMag > 0.12 && lum[idx] < 0.28)) {
+          rawEdge[idx] = 1;
         }
       }
     }
+
+    // 1-pixel Morphological Dilation of edge map to seal anti-aliased diagonal gaps
+    final isEdge = Uint8List.fromList(rawEdge);
+    for (int y = 1; y < height - 1; y++) {
+      final rowOff = y * width;
+      for (int x = 1; x < width - 1; x++) {
+        final idx = rowOff + x;
+        if (rawEdge[idx] == 1) {
+          isEdge[idx - 1] = 1;
+          isEdge[idx + 1] = 1;
+          isEdge[idx - width] = 1;
+          isEdge[idx + width] = 1;
+          isEdge[idx - width - 1] = 1;
+          isEdge[idx - width + 1] = 1;
+          isEdge[idx + width - 1] = 1;
+          isEdge[idx + width + 1] = 1;
+        }
+      }
+    }
+    // Never allow seed pixel to be marked as an edge
+    isEdge[seedY * width + seedX] = 0;
 
     // 2. Convert Seed Pixel to CIELAB with float32 precision
     final seedOff = (seedY * width + seedX) * 4;

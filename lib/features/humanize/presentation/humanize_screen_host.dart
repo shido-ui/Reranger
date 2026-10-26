@@ -80,6 +80,14 @@ class _HumanizeScreenHostState extends ConsumerState<HumanizeScreenHost> {
   }
 
   @override
+  void dispose() {
+    if (widget.controller == null) {
+      _controller?.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     if (_isLoading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));

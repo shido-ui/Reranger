@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+
 import 'package:crypto/crypto.dart';
 import 'package:image/image.dart' as img;
 import 'package:reranger/data/render/render_graph_executor.dart';
@@ -30,7 +31,12 @@ void main() async {
     exit(1);
   }
   final wcParams = watercolorPreset.resolveParameters(null);
-  final wcGraph = watercolorPreset.buildGraph(sourceHash, decoded.width, decoded.height, wcParams);
+  final wcGraph = watercolorPreset.buildGraph(
+    sourceHash,
+    decoded.width,
+    decoded.height,
+    wcParams,
+  );
   final wcResult = await executor.execute(
     graph: wcGraph,
     sourceImageBytes: inputBytes,
@@ -45,7 +51,9 @@ void main() async {
   final wcPngBytes = img.encodePng(wcImage);
   final wcOutFile = File('docs/evidence/prompt-30/watercolor_real_photo.png');
   await wcOutFile.writeAsBytes(wcPngBytes);
-  print('Saved Watercolor real photo to ${wcOutFile.path} (${wcPngBytes.length} bytes)');
+  print(
+    'Saved Watercolor real photo to ${wcOutFile.path} (${wcPngBytes.length} bytes)',
+  );
 
   // 2. Process Graphite Pencil Preset
   final graphitePreset = PresetCatalog.getById('graphite_pencil');
@@ -54,7 +62,12 @@ void main() async {
     exit(1);
   }
   final gpParams = graphitePreset.resolveParameters(null);
-  final gpGraph = graphitePreset.buildGraph(sourceHash, decoded.width, decoded.height, gpParams);
+  final gpGraph = graphitePreset.buildGraph(
+    sourceHash,
+    decoded.width,
+    decoded.height,
+    gpParams,
+  );
   final gpResult = await executor.execute(
     graph: gpGraph,
     sourceImageBytes: inputBytes,
@@ -67,15 +80,21 @@ void main() async {
     numChannels: 4,
   );
   final gpPngBytes = img.encodePng(gpImage);
-  final gpOutFile = File('docs/evidence/prompt-30/graphite_pencil_real_photo.png');
+  final gpOutFile = File(
+    'docs/evidence/prompt-30/graphite_pencil_real_photo.png',
+  );
   await gpOutFile.writeAsBytes(gpPngBytes);
-  print('Saved Graphite Pencil real photo to ${gpOutFile.path} (${gpPngBytes.length} bytes)');
+  print(
+    'Saved Graphite Pencil real photo to ${gpOutFile.path} (${gpPngBytes.length} bytes)',
+  );
 
   // 3. Copy to Artifact Directory for Markdown Embedding
-  const artifactDir = '/root/.gemini/antigravity-cli/brain/131f6c3f-f2c2-4492-b5c5-d64035cddb16';
+  const artifactDir =
+      '/root/.gemini/antigravity-cli/brain/131f6c3f-f2c2-4492-b5c5-d64035cddb16';
   final inputPngBytes = img.encodePng(decoded);
   await File('$artifactDir/input_portrait.png').writeAsBytes(inputPngBytes);
-  await File('docs/evidence/prompt-30/input_portrait.png').writeAsBytes(inputPngBytes);
+  await File('docs/evidence/prompt-30/input_portrait.png')
+      .writeAsBytes(inputPngBytes);
   await wcOutFile.copy('$artifactDir/watercolor_real_photo.png');
   await gpOutFile.copy('$artifactDir/graphite_pencil_real_photo.png');
   print('Successfully copied all images to artifact dir: $artifactDir');

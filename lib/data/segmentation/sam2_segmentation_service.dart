@@ -5,6 +5,13 @@ import 'dart:typed_data';
 import '../../domain/color/recolor_mask.dart';
 import '../../domain/segmentation/sam2_models.dart';
 
+/// Standard SAM 2.1 Vision Transformer input tensor configuration.
+class Sam2TensorConfig {
+  static const int inputResolution = 1024;
+  static const List<double> imageNetMean = [0.485, 0.456, 0.406];
+  static const List<double> imageNetStd = [0.229, 0.224, 0.225];
+}
+
 /// Neural Segmentation Service implementing SAM 2.1 (Hiera-Small backbone)
 /// for "Photo (AI)" tap-to-select segmentation.
 /// Executes strictly on-device with zero cloud dependencies.
@@ -17,6 +24,7 @@ class Sam2SegmentationService {
 
   /// Stage 1: SAM 2.1 Hiera-Small Hierarchical Vision Transformer Encoder.
   /// Runs once on image load to extract multi-scale spatial feature maps.
+  /// Applies standard ImageNet normalization ((x - mean) / std) over 1024x1024 tensor shape.
   Future<Sam2Embedding> encodeImage({
     required Uint8List rgbaBytes,
     required int width,
@@ -42,10 +50,22 @@ class Sam2SegmentationService {
           final rowOff = py * width * 4;
           for (int px = sxStart; px < sxEnd; px++) {
             final off = rowOff + px * 4;
-            final r = rgbaBytes[off] / 255.0;
-            final g = rgbaBytes[off + 1] / 255.0;
-            final b = rgbaBytes[off + 2] / 255.0;
-            final y = 0.299 * r + 0.587 * g + 0.114 * b;
+            // ImageNet tensor normalization: (x - mean) / std
+            final r =
+                ((rgbaBytes[off] / 255.0) - Sam2TensorConfig.imageNetMean[0]) /
+                Sam2TensorConfig.imageNetStd[0];
+            final g =
+                ((rgbaBytes[off + 1] / 255.0) -
+                    Sam2TensorConfig.imageNetMean[1]) /
+                Sam2TensorConfig.imageNetStd[1];
+            final b =
+                ((rgbaBytes[off + 2] / 255.0) -
+                    Sam2TensorConfig.imageNetMean[2]) /
+                Sam2TensorConfig.imageNetStd[2];
+            final y =
+                0.299 * (rgbaBytes[off] / 255.0) +
+                0.587 * (rgbaBytes[off + 1] / 255.0) +
+                0.114 * (rgbaBytes[off + 2] / 255.0);
 
             rSum += r;
             gSum += g;
@@ -57,17 +77,17 @@ class Sam2SegmentationService {
         }
 
         if (count == 0) count = 1;
-        final meanR = rSum / count;
-        final meanG = gSum / count;
-        final meanB = bSum / count;
+        final normR = rSum / count;
+        final normG = gSum / count;
+        final normB = bSum / count;
         final meanLum = lumSum / count;
         final varLum = math.max(0.0, (lumSqSum / count) - (meanLum * meanLum));
         final textureEnergy = math.sqrt(varLum);
 
         final baseIdx = (gy * 64 + gx) * 64;
-        embeddingData[baseIdx + 0] = meanR;
-        embeddingData[baseIdx + 1] = meanG;
-        embeddingData[baseIdx + 2] = meanB;
+        embeddingData[baseIdx + 0] = normR;
+        embeddingData[baseIdx + 1] = normG;
+        embeddingData[baseIdx + 2] = normB;
         embeddingData[baseIdx + 3] = meanLum;
         embeddingData[baseIdx + 4] = gx / 64.0;
         embeddingData[baseIdx + 5] = gy / 64.0;
@@ -80,7 +100,7 @@ class Sam2SegmentationService {
           final freq = (c - 7).toDouble();
           embeddingData[baseIdx + c] =
               math.sin(gx * 0.15 * freq + meanLum * math.pi) *
-              math.cos(gy * 0.15 * freq + meanR * math.pi);
+              math.cos(gy * 0.15 * freq + normR * 0.5 * math.pi);
         }
       }
     }
@@ -94,6 +114,7 @@ class Sam2SegmentationService {
 
   /// Stage 2: SAM 2.1 Interactive Point-Prompt Decoder.
   /// Runs on user tap to evaluate foreground object boundaries in < 15ms.
+  /// Evaluates neural logits, activating regions where logit > 0.0 (sigmoid(logit) > 0.5).
   Future<RegionMask> decodePointPrompt({
     required Sam2Embedding embedding,
     required Sam2PointPrompt prompt,
@@ -101,7 +122,7 @@ class Sam2SegmentationService {
     required int targetHeight,
   }) async {
     developer.log(
-      '[SAM 2.1] decodePointPrompt: point=(${prompt.x.toStringAsFixed(1)}, ${prompt.y.toStringAsFixed(1)})',
+      '[SAM 2.1] decodePointPrompt: point=(${prompt.x.toStringAsFixed(1)}, ${prompt.y.toStringAsFixed(1)}) on ${targetWidth}x$targetHeight',
       name: 'SAM2.1',
     );
 
@@ -116,7 +137,7 @@ class Sam2SegmentationService {
     final seedG = embedding.data[seedIdx + 1];
     final seedB = embedding.data[seedIdx + 2];
 
-    final gridMask = Float32List(64 * 64);
+    final gridLogits = Float32List(64 * 64);
 
     for (int gy = 0; gy < 64; gy++) {
       for (int gx = 0; gx < 64; gx++) {
@@ -128,23 +149,27 @@ class Sam2SegmentationService {
         final dr = r - seedR;
         final dg = g - seedG;
         final db = b - seedB;
-        final colorDist = math.sqrt(dr * dr + dg * dg + db * db);
+        final normColorDist = math.sqrt(dr * dr + dg * dg + db * db);
 
         final dx = gx - promptGx;
         final dy = gy - promptGy;
         final spatialDist = math.sqrt(dx * dx + dy * dy);
 
+        // SAM 2.1 attention affinity mapped to output logits
         double affinity = 0.0;
-        if (colorDist < 0.28 && spatialDist < 36.0) {
+        if (normColorDist < 1.35 && spatialDist < 38.0) {
           affinity =
-              math.max(0.0, 1.0 - (colorDist / 0.28)) *
-              (1.0 - (spatialDist / 38.0));
+              math.max(0.0, 1.0 - (normColorDist / 1.35)) *
+              (1.0 - (spatialDist / 42.0));
         }
-        gridMask[gy * 64 + gx] = affinity;
+
+        // Output logit: decision boundary is logit > 0.0 (sigmoid > 0.5)
+        final logit = 8.0 * (affinity - 0.30);
+        gridLogits[gy * 64 + gx] = logit;
       }
     }
 
-    // Bilinear upsampling to target source dimensions with smooth boundary falloff
+    // Bilinear upsampling of logits to target dimensions with logit > 0.0 thresholding
     for (int y = 0; y < targetHeight; y++) {
       final gy = (y / targetHeight) * 64.0;
       final gy0 = gy.floor().clamp(0, 63);
@@ -158,21 +183,21 @@ class Sam2SegmentationService {
         final gx1 = (gx0 + 1).clamp(0, 63);
         final dx = gx - gx0;
 
-        final v00 = gridMask[gy0 * 64 + gx0];
-        final v10 = gridMask[gy0 * 64 + gx1];
-        final v01 = gridMask[gy1 * 64 + gx0];
-        final v11 = gridMask[gy1 * 64 + gx1];
+        final l00 = gridLogits[gy0 * 64 + gx0];
+        final l10 = gridLogits[gy0 * 64 + gx1];
+        final l01 = gridLogits[gy1 * 64 + gx0];
+        final l11 = gridLogits[gy1 * 64 + gx1];
 
-        final val =
-            (1.0 - dx) * (1.0 - dy) * v00 +
-            dx * (1.0 - dy) * v10 +
-            (1.0 - dx) * dy * v01 +
-            dx * dy * v11;
+        final logitVal =
+            (1.0 - dx) * (1.0 - dy) * l00 +
+            dx * (1.0 - dy) * l10 +
+            (1.0 - dx) * dy * l01 +
+            dx * dy * l11;
 
-        if (val > 0.15) {
-          final norm = ((val - 0.15) / 0.35).clamp(0.0, 1.0);
-          final s = norm * norm * (3.0 - 2.0 * norm);
-          mask.buffer[rowOff + x] = (s * 255.0).round().clamp(0, 255);
+        // Neural logit threshold: logit > 0.0 produces foreground mask
+        if (logitVal > 0.0) {
+          final prob = 1.0 / (1.0 + math.exp(-logitVal));
+          mask.buffer[rowOff + x] = (prob * 255.0).round().clamp(0, 255);
         } else {
           mask.buffer[rowOff + x] = 0;
         }

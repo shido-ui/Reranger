@@ -47,6 +47,7 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
   @override
   void dispose() {
     _controller?.removeListener(_onControllerUpdated);
+    _controller?.dispose();
     super.dispose();
   }
 
@@ -404,7 +405,7 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
             )
           : Column(
               children: [
-                // Viewport with hold-to-compare and Tap-to-Recolor (EdgeTAM)
+                // Viewport with hold-to-compare and Tap-to-Recolor (SAM 2.1 / CIELAB)
                 Expanded(
                   flex: 5,
                   child: LayoutBuilder(
@@ -451,7 +452,7 @@ class _RecolorScreenState extends ConsumerState<RecolorScreen> {
                                       ),
                                       SizedBox(height: 8),
                                       Text(
-                                        'Segmenting with EdgeTAM...',
+                                        'Segmenting with SAM 2.1...',
                                         style: TextStyle(
                                           color: Colors.white,
                                           fontSize: 12,

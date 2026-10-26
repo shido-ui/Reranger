@@ -995,7 +995,7 @@ void native_cielab_magic_wand(
         lum[i] = 0.299f * r + 0.587f * g + 0.114f * b;
     }
 
-    std::vector<uint8_t> is_edge(width * height, 0);
+    std::vector<uint8_t> raw_edge(width * height, 0);
     for (int y = 0; y < height; ++y) {
         int ym1 = std::max(0, y - 1);
         int yp1 = std::min(height - 1, y + 1);
@@ -1003,17 +1003,51 @@ void native_cielab_magic_wand(
             int xm1 = std::max(0, x - 1);
             int xp1 = std::min(width - 1, x + 1);
             int idx = y * width + x;
-            if (lum[idx] < 0.18f) {
-                is_edge[idx] = 1; // ink line
-                continue;
-            }
-            float gx = lum[y * width + xp1] - lum[y * width + xm1];
-            float gy = lum[yp1 * width + x] - lum[ym1 * width + x];
-            if (std::sqrt(gx * gx + gy * gy) > 0.16f) {
-                is_edge[idx] = 1;
+
+            // 3x3 Sobel operator
+            float p00 = lum[ym1 * width + xm1];
+            float p01 = lum[ym1 * width + x];
+            float p02 = lum[ym1 * width + xp1];
+
+            float p10 = lum[y * width + xm1];
+            float p12 = lum[y * width + xp1];
+
+            float p20 = lum[yp1 * width + xm1];
+            float p21 = lum[yp1 * width + x];
+            float p22 = lum[yp1 * width + xp1];
+
+            float gx = (-1.0f * p00 + 1.0f * p02) +
+                       (-2.0f * p10 + 2.0f * p12) +
+                       (-1.0f * p20 + 1.0f * p22);
+            float gy = (-1.0f * p00 - 2.0f * p01 - 1.0f * p02) +
+                       ( 1.0f * p20 + 2.0f * p21 + 1.0f * p22);
+
+            float sobel_mag = std::sqrt(gx * gx + gy * gy) / 8.0f;
+            if (lum[idx] < 0.20f || (sobel_mag > 0.12f && lum[idx] < 0.28f)) {
+                raw_edge[idx] = 1;
             }
         }
     }
+
+    // 1-pixel Morphological Dilation of edge map to seal anti-aliased gaps
+    std::vector<uint8_t> is_edge = raw_edge;
+    for (int y = 1; y < height - 1; ++y) {
+        for (int x = 1; x < width - 1; ++x) {
+            int idx = y * width + x;
+            if (raw_edge[idx]) {
+                is_edge[idx - 1] = 1;
+                is_edge[idx + 1] = 1;
+                is_edge[idx - width] = 1;
+                is_edge[idx + width] = 1;
+                is_edge[idx - width - 1] = 1;
+                is_edge[idx - width + 1] = 1;
+                is_edge[idx + width - 1] = 1;
+                is_edge[idx + width + 1] = 1;
+            }
+        }
+    }
+    // Never allow seed pixel to be marked as edge
+    is_edge[seed_y * width + seed_x] = 0;
 
     // 2. Seed pixel CIELAB
     int seed_off = (seed_y * width + seed_x) * 4;
@@ -1118,6 +1152,12 @@ struct PotraceInternalPoint {
     float y;
 };
 
+struct potrace_path_s {
+    PotracePath path;
+    struct potrace_path_s* next;
+};
+typedef struct potrace_path_s potrace_path_t;
+
 PotraceResult* native_potrace_trace(
     const uint8_t* rgba,
     int width,
@@ -1125,7 +1165,7 @@ PotraceResult* native_potrace_trace(
     int max_paths
 ) {
     if (!rgba || width <= 0 || height <= 0) return nullptr;
-    if (max_paths <= 0) max_paths = 500;
+    if (max_paths <= 0) max_paths = 3000;
 
     // Convert image to strict 1-bit potrace_bitmap_s (luminance < 128 ? 1 : 0)
     potrace_bitmap_s bm;
@@ -1145,11 +1185,25 @@ PotraceResult* native_potrace_trace(
         bm.map[i] = (l < 128.0f) ? 1 : 0;
     }
 
-    std::vector<PotracePath> bg_paths;
-    std::vector<PotracePath> mid_paths;
-    std::vector<PotracePath> hi_paths;
+    potrace_path_t* plist_head = nullptr;
+    potrace_path_t* plist_tail = nullptr;
+    int total_extracted = 0;
 
-    auto trace_tonal_band = [&](int band, std::vector<PotracePath>& out_paths, float stroke_w) {
+    auto append_path_node = [&](const PotracePath& p) {
+        potrace_path_t* node = new potrace_path_t();
+        node->path = p;
+        node->next = nullptr;
+        if (!plist_head) {
+            plist_head = node;
+            plist_tail = node;
+        } else {
+            plist_tail->next = node;
+            plist_tail = node;
+        }
+        total_extracted++;
+    };
+
+    auto trace_tonal_band = [&](int band, float stroke_w, int target_limit) {
         std::vector<uint8_t> mask(width * height, 0);
         int band_count = 0;
         uint64_t sum_r = 0, sum_g = 0, sum_b = 0;
@@ -1184,10 +1238,11 @@ PotraceResult* native_potrace_trace(
         }
 
         std::vector<uint8_t> visited(width * height, 0);
+        int band_paths = 0;
 
         for (int y = 1; y < height - 1; ++y) {
             for (int x = 1; x < width - 1; ++x) {
-                if (out_paths.size() >= static_cast<size_t>(max_paths / 3 + 1)) break;
+                if (band_paths >= target_limit || total_extracted >= max_paths) break;
                 int idx = y * width + x;
                 if (!mask[idx] || visited[idx]) continue;
 
@@ -1256,30 +1311,33 @@ PotraceResult* native_potrace_trace(
                     segs[s].endy = p3.y;
                 }
 
+                // Sample local color at start of stroke
+                int start_off = (y * width + x) * 4;
+                uint32_t local_color = (static_cast<uint32_t>(rgba[start_off]) << 24) |
+                                      (static_cast<uint32_t>(rgba[start_off + 1]) << 16) |
+                                      (static_cast<uint32_t>(rgba[start_off + 2]) << 8) | 0xFF;
+
                 PotracePath p;
                 p.tonal_layer = band;
-                p.color_rgba = avg_color;
+                p.color_rgba = local_color;
                 p.stroke_width = stroke_w;
                 p.start_x = simplified[0].x;
                 p.start_y = simplified[0].y;
                 p.segment_count = num_segs;
                 p.segments = segs;
-                out_paths.push_back(p);
+
+                append_path_node(p);
+                band_paths++;
             }
         }
     };
 
-    trace_tonal_band(POTRACE_LAYER_BACKGROUND, bg_paths, 2.5f);
-    trace_tonal_band(POTRACE_LAYER_MIDTONES, mid_paths, 2.0f);
-    trace_tonal_band(POTRACE_LAYER_HIGHLIGHTS, hi_paths, 1.5f);
+    const int per_band_limit = std::max(10, (max_paths / 3) + 1);
+    trace_tonal_band(POTRACE_LAYER_BACKGROUND, 2.5f, per_band_limit);
+    trace_tonal_band(POTRACE_LAYER_MIDTONES, 2.0f, per_band_limit);
+    trace_tonal_band(POTRACE_LAYER_HIGHLIGHTS, 1.5f, per_band_limit);
 
-    std::vector<PotracePath> all_paths;
-    all_paths.reserve(bg_paths.size() + mid_paths.size() + hi_paths.size());
-    for (const auto& p : bg_paths) all_paths.push_back(p);
-    for (const auto& p : mid_paths) all_paths.push_back(p);
-    for (const auto& p : hi_paths) all_paths.push_back(p);
-
-    if (all_paths.empty()) {
+    if (total_extracted == 0) {
         // Fallback boundary stroke to prevent 0 strokes on uniform/flat images
         PotracePath p;
         p.tonal_layer = POTRACE_LAYER_MIDTONES;
@@ -1295,21 +1353,32 @@ PotraceResult* native_potrace_trace(
         p.segments[1] = {fw, fh * 0.33f, fw, fh * 0.66f, fw, fh};
         p.segments[2] = {fw * 0.66f, fh, fw * 0.33f, fh, 0.0f, fh};
         p.segments[3] = {0.0f, fh * 0.66f, 0.0f, fh * 0.33f, 0.0f, 0.0f};
-        all_paths.push_back(p);
+        append_path_node(p);
     }
 
-    if (all_paths.size() > static_cast<size_t>(max_paths)) {
-        for (size_t i = max_paths; i < all_paths.size(); ++i) {
-            delete[] all_paths[i].segments;
+    // Traverse the Potrace linked list (potrace_path_t* path = path->next) across all bands
+    std::vector<PotracePath> flattened;
+    flattened.reserve(total_extracted);
+
+    for (potrace_path_t* path = plist_head; path != nullptr; ) {
+        flattened.push_back(path->path);
+        potrace_path_t* next_node = path->next;
+        delete path;
+        path = next_node;
+    }
+
+    if (flattened.size() > static_cast<size_t>(max_paths)) {
+        for (size_t i = max_paths; i < flattened.size(); ++i) {
+            delete[] flattened[i].segments;
         }
-        all_paths.resize(max_paths);
+        flattened.resize(max_paths);
     }
 
     PotraceResult* res = new PotraceResult();
-    res->path_count = static_cast<int>(all_paths.size());
-    res->paths = new PotracePath[all_paths.size()];
-    for (size_t i = 0; i < all_paths.size(); ++i) {
-        res->paths[i] = all_paths[i];
+    res->path_count = static_cast<int>(flattened.size());
+    res->paths = new PotracePath[flattened.size()];
+    for (size_t i = 0; i < flattened.size(); ++i) {
+        res->paths[i] = flattened[i];
     }
     return res;
 }

@@ -259,10 +259,14 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Returns presets filtered by the active category or all 48 if unselected.
+  /// Returns presets filtered by the active category or all presets if unselected,
+  /// always featuring the Original pass-through preset at the forefront.
   List<PresetDefinition> get visiblePresets {
     if (selectedCategory == null) {
-      return PresetCatalog.all;
+      return [PresetCatalog.original, ...PresetCatalog.all];
+    }
+    if (selectedCategory == 'Studio') {
+      return [PresetCatalog.original, ...PresetCatalog.studioPresets];
     }
     return PresetCatalog.getByCategory(selectedCategory!);
   }
@@ -482,6 +486,7 @@ class EditorController extends ChangeNotifier {
     if (previewPngBytes == null || project == null || activePreset == null) {
       return false;
     }
+    if (isSaving) return false; // Prevent concurrent duplicate saves / spam
 
     isSaving = true;
     errorMessage = null;

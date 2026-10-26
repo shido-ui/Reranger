@@ -30,7 +30,7 @@ class PotraceVectorizer {
     required Uint8List rgbaBytes,
     required int width,
     required int height,
-    int maxPaths = 180,
+    int maxPaths = 2500,
   }) async {
     final params = _VectorizeTaskParams(
       rgbaBytes: rgbaBytes,
@@ -74,132 +74,181 @@ class PotraceVectorizer {
     final midStrokes = <AutodrawStroke>[];
     final hiStrokes = <AutodrawStroke>[];
 
-    final maxPerBand = (params.maxPaths / 3).ceil().clamp(10, 100);
+    final maxPerBand = (params.maxPaths / 3).ceil().clamp(10, 3000);
 
-    // 2. Trace each tonal band in deterministic order
+    // 2. Trace each tonal band in deterministic order across multi-level sub-bands
     void traceTonalBand(
       AutodrawTonalLayer layer,
       List<AutodrawStroke> outList,
       double strokeWidth,
     ) {
-      final mask = Uint8List(total);
-      int bandPixels = 0;
-      int sumR = 0, sumG = 0, sumB = 0;
+      final subRanges = layer == AutodrawTonalLayer.background
+          ? const [(0, 45), (45, 85)]
+          : layer == AutodrawTonalLayer.midtones
+          ? const [(85, 128), (128, 170)]
+          : const [(170, 215), (215, 256)];
 
-      for (int i = 0; i < total; i++) {
-        final l = lum[i];
-        bool inBand = false;
-        if (layer == AutodrawTonalLayer.background) {
-          inBand = l < 85;
-        } else if (layer == AutodrawTonalLayer.midtones) {
-          inBand = l >= 85 && l < 170;
-        } else {
-          inBand = l >= 170;
+      for (final (low, high) in subRanges) {
+        if (outList.length >= maxPerBand) break;
+
+        final mask = Uint8List(total);
+        int bandPixels = 0;
+
+        for (int i = 0; i < total; i++) {
+          final l = lum[i];
+          if (l >= low && l < high) {
+            mask[i] = 1;
+            bandPixels++;
+          }
         }
 
-        if (inBand) {
-          mask[i] = 1;
-          bandPixels++;
-          final off = i * 4;
-          sumR += rgba[off];
-          sumG += rgba[off + 1];
-          sumB += rgba[off + 2];
-        }
-      }
+        if (bandPixels == 0) continue;
 
-      if (bandPixels == 0) return;
+        final visited = Uint8List(total);
 
-      final avgR = (sumR / bandPixels).round().clamp(0, 255);
-      final avgG = (sumG / bandPixels).round().clamp(0, 255);
-      final avgB = (sumB / bandPixels).round().clamp(0, 255);
-      final strokeColor = Color.fromARGB(255, avgR, avgG, avgB);
-
-      final visited = Uint8List(total);
-
-      for (int y = 1; y < height - 1; y++) {
-        for (int x = 1; x < width - 1; x++) {
+        for (int y = 1; y < height - 1; y++) {
           if (outList.length >= maxPerBand) break;
-          final idx = y * width + x;
-          if (mask[idx] == 0 || visited[idx] == 1) continue;
+          for (int x = 1; x < width - 1; x++) {
+            if (outList.length >= maxPerBand) break;
+            final idx = y * width + x;
+            if (mask[idx] == 0 || visited[idx] == 1) continue;
 
-          // Boundary edge detection
-          final isEdge =
-              mask[idx - 1] == 0 ||
-              mask[idx + 1] == 0 ||
-              mask[idx - width] == 0 ||
-              mask[idx + width] == 0;
-          if (!isEdge) continue;
+            // Boundary edge detection
+            final isEdge =
+                mask[idx - 1] == 0 ||
+                mask[idx + 1] == 0 ||
+                mask[idx - width] == 0 ||
+                mask[idx + width] == 0;
+            if (!isEdge) continue;
 
-          // Trace boundary contour
-          final contour = <Offset>[];
-          int currX = x;
-          int currY = y;
+            // Trace boundary contour
+            final contour = <Offset>[];
+            int currX = x;
+            int currY = y;
 
-          for (int step = 0; step < 64; step++) {
-            visited[currY * width + currX] = 1;
-            contour.add(Offset(currX.toDouble(), currY.toDouble()));
+            for (int step = 0; step < 64; step++) {
+              visited[currY * width + currX] = 1;
+              contour.add(Offset(currX.toDouble(), currY.toDouble()));
 
-            int nextX = -1, nextY = -1;
-            const dx = [1, 1, 0, -1, -1, -1, 0, 1];
-            const dy = [0, 1, 1, 1, 0, -1, -1, -1];
+              int nextX = -1, nextY = -1;
+              const dx = [1, 1, 0, -1, -1, -1, 0, 1];
+              const dy = [0, 1, 1, 1, 0, -1, -1, -1];
 
-            for (int d = 0; d < 8; d++) {
-              final nx = currX + dx[d];
-              final ny = currY + dy[d];
-              if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                final nidx = ny * width + nx;
-                if (mask[nidx] == 1 && visited[nidx] == 0) {
-                  nextX = nx;
-                  nextY = ny;
-                  break;
+              for (int d = 0; d < 8; d++) {
+                final nx = currX + dx[d];
+                final ny = currY + dy[d];
+                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                  final nidx = ny * width + nx;
+                  if (mask[nidx] == 1 && visited[nidx] == 0) {
+                    nextX = nx;
+                    nextY = ny;
+                    break;
+                  }
                 }
               }
+              if (nextX == -1) break;
+              currX = nextX;
+              currY = nextY;
             }
-            if (nextX == -1) break;
-            currX = nextX;
-            currY = nextY;
+
+            if (contour.length < 2) continue;
+
+            // Polygon simplification (sample key points)
+            final simplified = <Offset>[contour.first];
+            for (int k = 2; k < contour.length - 1; k += 2) {
+              simplified.add(contour[k]);
+            }
+            simplified.add(contour.last);
+
+            final numSegs = simplified.length - 1;
+            if (numSegs <= 0) continue;
+
+            // Fit cubic Bézier segments with C1 continuity
+            final segments = <BezierSegment>[];
+            for (int s = 0; s < numSegs; s++) {
+              final p0 = simplified[s];
+              final p3 = simplified[s + 1];
+
+              final prev = s > 0 ? simplified[s - 1] : p0;
+              final next = s + 2 < simplified.length ? simplified[s + 2] : p3;
+
+              final t0 = (p3 - prev) * 0.35;
+              final t3 = (next - p0) * 0.35;
+
+              final cp1 = p0 + t0 / 3.0;
+              final cp2 = p3 - t3 / 3.0;
+
+              segments.add(BezierSegment(cp1: cp1, cp2: cp2, end: p3));
+            }
+
+            // Sample local vibrant color at stroke starting position
+            final startOff = (y * width + x) * 4;
+            final strokeColor = Color.fromARGB(
+              255,
+              rgba[startOff],
+              rgba[startOff + 1],
+              rgba[startOff + 2],
+            );
+
+            outList.add(
+              AutodrawStroke(
+                id: outList.length + 1,
+                layer: layer,
+                color: strokeColor,
+                strokeWidth: strokeWidth,
+                startPoint: simplified.first,
+                segments: segments,
+              ),
+            );
           }
+        }
 
-          if (contour.length < 2) continue;
-
-          // Polygon simplification (sample key points)
-          final simplified = <Offset>[contour.first];
-          for (int k = 2; k < contour.length - 1; k += 2) {
-            simplified.add(contour[k]);
+        // SBR (Stroke-Based Rendering) interior tonal fill strokes
+        const fillStride = 5;
+        for (int y = 2; y < height - 2; y += fillStride) {
+          if (outList.length >= maxPerBand) break;
+          int runStart = -1;
+          for (int x = 2; x < width - 2; x++) {
+            if (outList.length >= maxPerBand) break;
+            final idx = y * width + x;
+            if (mask[idx] == 1) {
+              if (runStart == -1) runStart = x;
+              if (x - runStart >= 16 || x == width - 3 || mask[idx + 1] == 0) {
+                if (x - runStart >= 4) {
+                  final p0 = Offset(runStart.toDouble(), y.toDouble());
+                  final p3 = Offset(x.toDouble(), y.toDouble());
+                  final cp1 = Offset(
+                    runStart + (x - runStart) * 0.33,
+                    y + (y % 4 == 0 ? 1.0 : -1.0),
+                  );
+                  final cp2 = Offset(
+                    runStart + (x - runStart) * 0.66,
+                    y + (y % 4 == 0 ? -1.0 : 1.0),
+                  );
+                  final startOff = (y * width + runStart) * 4;
+                  final strokeColor = Color.fromARGB(
+                    255,
+                    rgba[startOff],
+                    rgba[startOff + 1],
+                    rgba[startOff + 2],
+                  );
+                  outList.add(
+                    AutodrawStroke(
+                      id: outList.length + 1,
+                      layer: layer,
+                      color: strokeColor,
+                      strokeWidth: strokeWidth * 0.85,
+                      startPoint: p0,
+                      segments: [BezierSegment(cp1: cp1, cp2: cp2, end: p3)],
+                    ),
+                  );
+                }
+                runStart = -1;
+              }
+            } else {
+              runStart = -1;
+            }
           }
-          simplified.add(contour.last);
-
-          final numSegs = simplified.length - 1;
-          if (numSegs <= 0) continue;
-
-          // Fit cubic Bézier segments with C1 continuity
-          final segments = <BezierSegment>[];
-          for (int s = 0; s < numSegs; s++) {
-            final p0 = simplified[s];
-            final p3 = simplified[s + 1];
-
-            final prev = s > 0 ? simplified[s - 1] : p0;
-            final next = s + 2 < simplified.length ? simplified[s + 2] : p3;
-
-            final t0 = (p3 - prev) * 0.35;
-            final t3 = (next - p0) * 0.35;
-
-            final cp1 = p0 + t0 / 3.0;
-            final cp2 = p3 - t3 / 3.0;
-
-            segments.add(BezierSegment(cp1: cp1, cp2: cp2, end: p3));
-          }
-
-          outList.add(
-            AutodrawStroke(
-              id: outList.length + 1,
-              layer: layer,
-              color: strokeColor,
-              strokeWidth: strokeWidth,
-              startPoint: simplified.first,
-              segments: segments,
-            ),
-          );
         }
       }
     }

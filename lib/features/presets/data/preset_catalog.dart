@@ -102,8 +102,12 @@ class PresetCatalog {
   static bool containsId(String id) => _byId.containsKey(id);
 
   /// Returns list of all presets belonging to [category].
-  static List<PresetDefinition> getByCategory(String category) =>
-      all.where((p) => p.category == category).toList(growable: false);
+  static List<PresetDefinition> getByCategory(String category) {
+    if (category == 'Studio') {
+      return [original, ...studioPresets];
+    }
+    return all.where((p) => p.category == category).toList(growable: false);
+  }
 
   /// Returns distinct list of all registered categories in canonical appearance order.
   static List<String> get categories {

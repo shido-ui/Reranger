@@ -448,7 +448,7 @@ void main() {
       expect(
         controller.state.semanticSegmentationAvailable,
         isTrue,
-      ); // EdgeTAM semantic segmentation integrated
+      ); // SAM 2.1 semantic segmentation integrated
 
       // 1. Set target color
       controller.setTargetColor(const ColorRgb(0, 255, 0));

@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 
 import '../../../core/theme/color_tokens.dart';
@@ -86,7 +86,7 @@ class _AutodrawScreenState extends State<AutodrawScreen>
           final result = await pipeline.processAndVectorize(
             sourceImageBytes: widget.sourceImageBytes!,
             renderGraph: widget.renderGraph!,
-            maxPaths: 180,
+            maxPaths: 2500,
           );
           if (mounted) {
             setState(() {
@@ -123,7 +123,7 @@ class _AutodrawScreenState extends State<AutodrawScreen>
         rgbaBytes: rgbaBytes,
         width: decoded.width,
         height: decoded.height,
-        maxPaths: 180,
+        maxPaths: 2500,
       );
 
       if (mounted) {
@@ -183,6 +183,7 @@ class _AutodrawScreenState extends State<AutodrawScreen>
 
   Future<void> _saveVideo() async {
     if (_vectorResult == null || _isEncoding) return;
+    HapticFeedback.mediumImpact();
 
     setState(() => _isEncoding = true);
 
@@ -416,6 +417,7 @@ class _AutodrawScreenState extends State<AutodrawScreen>
                                 ),
                                 tooltip: _isPlaying ? 'Pause' : 'Play',
                                 onPressed: () {
+                                  HapticFeedback.selectionClick();
                                   setState(() {
                                     _isPlaying = !_isPlaying;
                                     if (_isPlaying) {

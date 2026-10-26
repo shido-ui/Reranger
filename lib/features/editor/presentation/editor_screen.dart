@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -85,7 +86,20 @@ class EditorScreen extends ConsumerWidget {
                     projectId,
                   );
                   if (GoRouter.maybeOf(context) != null) {
-                    context.push(target);
+                    context.push(
+                      target,
+                      extra: {
+                        'sourceImageBytes': activeController.sourceImageBytes,
+                        'processedImageBytes': activeController.previewPngBytes,
+                        'renderGraph': activeController.activePreset
+                            ?.buildGraph(
+                              activeController.project?.sourceImageHash ?? '',
+                              activeController.project?.sourceWidth ?? 1024,
+                              activeController.project?.sourceHeight ?? 1024,
+                              activeController.parameterValues,
+                            ),
+                      },
+                    );
                   }
                 },
               ),
@@ -100,7 +114,20 @@ class EditorScreen extends ConsumerWidget {
                     projectId,
                   );
                   if (GoRouter.maybeOf(context) != null) {
-                    context.push(target);
+                    context.push(
+                      target,
+                      extra: {
+                        'sourceImageBytes': activeController.sourceImageBytes,
+                        'processedImageBytes': activeController.previewPngBytes,
+                        'renderGraph': activeController.activePreset
+                            ?.buildGraph(
+                              activeController.project?.sourceImageHash ?? '',
+                              activeController.project?.sourceWidth ?? 1024,
+                              activeController.project?.sourceHeight ?? 1024,
+                              activeController.parameterValues,
+                            ),
+                      },
+                    );
                   }
                 },
               ),
@@ -115,7 +142,20 @@ class EditorScreen extends ConsumerWidget {
                     projectId,
                   );
                   if (GoRouter.maybeOf(context) != null) {
-                    context.push(target);
+                    context.push(
+                      target,
+                      extra: {
+                        'sourceImageBytes': activeController.sourceImageBytes,
+                        'processedImageBytes': activeController.previewPngBytes,
+                        'renderGraph': activeController.activePreset
+                            ?.buildGraph(
+                              activeController.project?.sourceImageHash ?? '',
+                              activeController.project?.sourceWidth ?? 1024,
+                              activeController.project?.sourceHeight ?? 1024,
+                              activeController.parameterValues,
+                            ),
+                      },
+                    );
                   }
                 },
               ),
@@ -162,6 +202,7 @@ class EditorScreen extends ConsumerWidget {
                   onPressed: activeController.previewPngBytes == null
                       ? null
                       : () async {
+                          HapticFeedback.mediumImpact();
                           final ok = await activeController.saveProject();
                           if (context.mounted && ok) {
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -342,10 +383,17 @@ class EditorScreen extends ConsumerWidget {
                             button: true,
                             label: 'Hold to compare with original image',
                             child: GestureDetector(
-                              onTapDown: (_) => controller.setComparing(true),
+                              onTapDown: (_) {
+                                HapticFeedback.lightImpact();
+                                controller.setComparing(true);
+                              },
                               onTapUp: (_) => controller.setComparing(false),
                               onTapCancel: () => controller.setComparing(false),
                               child: Container(
+                                constraints: const BoxConstraints(
+                                  minHeight: 48,
+                                  minWidth: 48,
+                                ),
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: AppSpacingTokens.md,
                                   vertical: AppSpacingTokens.sm,
@@ -558,17 +606,31 @@ class EditorScreen extends ConsumerWidget {
             ),
             children: [
               FilterChip(
-                label: const Text('All (48)'),
+                label: const Text('All'),
                 selected: controller.selectedCategory == null,
-                onSelected: (_) => controller.setSelectedCategory(null),
+                onSelected: (_) {
+                  HapticFeedback.selectionClick();
+                  controller.setSelectedCategory(null);
+                },
+              ),
+              const SizedBox(width: AppSpacingTokens.xs),
+              FilterChip(
+                label: const Text('Studio'),
+                selected: controller.selectedCategory == 'Studio',
+                onSelected: (selected) {
+                  HapticFeedback.selectionClick();
+                  controller.setSelectedCategory(selected ? 'Studio' : null);
+                },
               ),
               const SizedBox(width: AppSpacingTokens.xs),
               for (final cat in PresetCatalog.categories) ...[
                 FilterChip(
                   label: Text(cat),
                   selected: controller.selectedCategory == cat,
-                  onSelected: (selected) =>
-                      controller.setSelectedCategory(selected ? cat : null),
+                  onSelected: (selected) {
+                    HapticFeedback.selectionClick();
+                    controller.setSelectedCategory(selected ? cat : null);
+                  },
                 ),
                 const SizedBox(width: AppSpacingTokens.xs),
               ],
@@ -604,7 +666,10 @@ class EditorScreen extends ConsumerWidget {
                   selected: isSelected,
                   label: preset.accessibleLabel,
                   child: GestureDetector(
-                    onTap: () => controller.selectPreset(preset),
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      controller.selectPreset(preset);
+                    },
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [

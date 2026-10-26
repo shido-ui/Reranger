@@ -22,7 +22,7 @@ class AutodrawPipeline {
   Future<AutodrawVectorizationResult> processAndVectorize({
     required Uint8List sourceImageBytes,
     required RenderGraph renderGraph,
-    int maxPaths = 180,
+    int maxPaths = 2500,
   }) async {
     // 1. Render Graph execution (CIELAB, Vibrancy, Presets)
     final renderResult = await executor.execute(

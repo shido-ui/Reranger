@@ -1,4 +1,4 @@
-/// Semantic categories supported by EdgeTAM zero-shot segmentation.
+/// Semantic categories supported by SAM 2.1 zero-shot segmentation.
 enum SmartSelectCategory {
   hair(hintId: 1, label: 'Hair'),
   face(hintId: 2, label: 'Face'),
