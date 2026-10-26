@@ -458,60 +458,57 @@ void test_sensor_noise_and_ssim() {
     std::cout << "[PASS] test_sensor_noise_and_ssim passed." << std::endl;
 }
 
-void test_potrace_vectorization() {
-    std::cout << "[RUN] test_potrace_vectorization..." << std::endl;
+void test_skeleton_vectorization() {
+    std::cout << "[RUN] test_skeleton_vectorization (Guo-Hall Thinning & Medial Axis)..." << std::endl;
 
-    const int w = 64, h = 64;
-    std::vector<uint8_t> src(w * h * 4);
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
+    const int w = 128, h = 128;
+    std::vector<uint8_t> src(w * h * 4, 255); // White canvas
+    // Draw some dark ink strokes
+    for (int y = 20; y < 100; ++y) {
+        for (int x = 20; x < 28; ++x) { // Vertical thick bar (width 8)
             int off = (y * w + x) * 4;
-            if (x < 20) {
-                // Background (dark: L ~ 30)
-                src[off]     = 30;
-                src[off + 1] = 30;
-                src[off + 2] = 30;
-                src[off + 3] = 255;
-            } else if (x < 44) {
-                // Midtones (L ~ 128)
-                src[off]     = 128;
-                src[off + 1] = 128;
-                src[off + 2] = 128;
-                src[off + 3] = 255;
-            } else {
-                // Highlights (bright: L ~ 220)
-                src[off]     = 220;
-                src[off + 1] = 220;
-                src[off + 2] = 220;
-                src[off + 3] = 255;
-            }
+            src[off] = 20;
+            src[off + 1] = 20;
+            src[off + 2] = 20;
+            src[off + 3] = 255;
+        }
+    }
+    for (int x = 20; x < 100; ++x) {
+        for (int y = 56; y < 62; ++y) { // Horizontal cross bar (width 6)
+            int off = (y * w + x) * 4;
+            src[off] = 20;
+            src[off + 1] = 20;
+            src[off + 2] = 20;
+            src[off + 3] = 255;
         }
     }
 
-    PotraceResult* result = native_potrace_trace(src.data(), w, h, 60);
-    assert(result != nullptr);
-    assert(result->path_count > 0);
-    std::cout << "   [Potrace] Extracted Paths: " << result->path_count << std::endl;
+    StrokeBuffer* buffer = native_skeleton_trace(src.data(), w, h, 60);
+    assert(buffer != nullptr);
+    assert(buffer->stroke_count > 0);
+    assert(buffer->total_points > 0);
+    assert(buffer->points_x_y != nullptr);
+    assert(buffer->widths != nullptr);
+    assert(buffer->offsets != nullptr);
 
-    // Verify strict tonal layer ordering: Background (0) -> Midtones (1) -> Highlights (2)
-    int current_layer = 0;
-    for (int i = 0; i < result->path_count; ++i) {
-        const PotracePath& p = result->paths[i];
-        assert(p.tonal_layer >= current_layer);
-        current_layer = p.tonal_layer;
-        assert(p.segment_count > 0);
-        assert(p.segments != nullptr);
+    std::cout << "   [Skeleton] Extracted Strokes: " << buffer->stroke_count
+              << ", Total Points: " << buffer->total_points << std::endl;
 
-        for (int s = 0; s < p.segment_count; ++s) {
-            const PotraceBezierSegment& seg = p.segments[s];
-            assert(std::isfinite(seg.cp1x) && std::isfinite(seg.cp1y));
-            assert(std::isfinite(seg.cp2x) && std::isfinite(seg.cp2y));
-            assert(std::isfinite(seg.endx) && std::isfinite(seg.endy));
-        }
+    // Verify offsets and point coordinates
+    assert(buffer->offsets[0] == 0);
+    assert(buffer->offsets[buffer->stroke_count] == static_cast<uint32_t>(buffer->total_points));
+
+    for (int p = 0; p < buffer->total_points; ++p) {
+        int16_t x = buffer->points_x_y[p * 2];
+        int16_t y = buffer->points_x_y[p * 2 + 1];
+        uint8_t width = buffer->widths[p];
+        assert(x >= 0 && x <= w);
+        assert(y >= 0 && y <= h);
+        assert(width >= 1);
     }
 
-    native_potrace_free(result);
-    std::cout << "[PASS] test_potrace_vectorization passed." << std::endl;
+    native_stroke_buffer_free(buffer);
+    std::cout << "[PASS] test_skeleton_vectorization passed." << std::endl;
 }
 
 void test_watercolor_wash() {
@@ -574,7 +571,7 @@ int main() {
     test_metadata_annihilation();
     test_armor_attack_and_ssim();
     test_sensor_noise_and_ssim();
-    test_potrace_vectorization();
+    test_skeleton_vectorization();
     std::cout << "=== ALL NATIVE C++ TESTS PASSED (100%) ===" << std::endl;
     return 0;
 }

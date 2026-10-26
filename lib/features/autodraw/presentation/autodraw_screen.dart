@@ -397,6 +397,7 @@ class _AutodrawScreenState extends State<AutodrawScreen>
                                 sourceWidth: _vectorResult?.width ?? 1,
                                 sourceHeight: _vectorResult?.height ?? 1,
                                 renderCache: _renderCache,
+                                flatBuffer: _vectorResult?.flatBuffer,
                               ),
                               size: Size.infinite,
                             ),
@@ -526,10 +527,12 @@ class _AutodrawScreenState extends State<AutodrawScreen>
 /// on subsequent frames.
 class AutodrawRenderCache {
   ui.Picture? _cachedPicture;
+  ui.Image? _cachedImage;
   int _cachedStrokeCount = 0;
   Size _cachedSize = Size.zero;
 
   ui.Picture? get picture => _cachedPicture;
+  ui.Image? get image => _cachedImage;
   int get cachedStrokeCount => _cachedStrokeCount;
 
   void update({
@@ -560,7 +563,9 @@ class AutodrawRenderCache {
       Rect.fromLTWH(0, 0, size.width, size.height),
     );
 
-    if (_cachedPicture != null) {
+    if (_cachedImage != null) {
+      canvas.drawImage(_cachedImage!, Offset.zero, Paint());
+    } else if (_cachedPicture != null) {
       canvas.drawPicture(_cachedPicture!);
     }
 
@@ -577,10 +582,21 @@ class AutodrawRenderCache {
     final newPicture = recorder.endRecording();
     _cachedPicture?.dispose();
     _cachedPicture = newPicture;
+    try {
+      final imgW = size.width.ceil().clamp(1, 4096);
+      final imgH = size.height.ceil().clamp(1, 4096);
+      final newImg = newPicture.toImageSync(imgW, imgH);
+      _cachedImage?.dispose();
+      _cachedImage = newImg;
+    } catch (_) {
+      // Graceful fallback if toImageSync is unsupported in test VM
+    }
     _cachedStrokeCount = end;
   }
 
   void clear() {
+    _cachedImage?.dispose();
+    _cachedImage = null;
     _cachedPicture?.dispose();
     _cachedPicture = null;
     _cachedStrokeCount = 0;
@@ -601,6 +617,7 @@ class AutodrawPainter extends CustomPainter {
   final int sourceWidth;
   final int sourceHeight;
   final AutodrawRenderCache? renderCache;
+  final FlatStrokeBuffer? flatBuffer;
 
   const AutodrawPainter({
     required this.strokes,
@@ -610,6 +627,7 @@ class AutodrawPainter extends CustomPainter {
     required this.sourceWidth,
     required this.sourceHeight,
     this.renderCache,
+    this.flatBuffer,
   });
 
   /// Draws an artist-grade brush stroke:
@@ -731,7 +749,9 @@ class AutodrawPainter extends CustomPainter {
         scaleY: scaleY,
       );
 
-      if (renderCache!.picture != null) {
+      if (renderCache!.image != null) {
+        canvas.drawImage(renderCache!.image!, Offset.zero, Paint());
+      } else if (renderCache!.picture != null) {
         canvas.drawPicture(renderCache!.picture!);
       }
     } else {

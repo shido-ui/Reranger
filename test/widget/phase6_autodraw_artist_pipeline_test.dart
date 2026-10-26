@@ -725,5 +725,52 @@ void main() {
         await tester.pumpWidget(const SizedBox());
       },
     );
+
+    test('MANDATE 2 & 3: Guo-Hall Skeletonization, Medial Axis Transform, and Zero-Copy FlatStrokeBuffer binary search', () async {
+      final testImg = img.Image(width: 64, height: 64, numChannels: 4);
+      img.fill(testImg, color: img.ColorRgba8(250, 250, 250, 255));
+      // Draw thick horizontal and vertical strokes
+      for (int y = 10; y < 50; y++) {
+        for (int x = 20; x < 26; x++) {
+          testImg.setPixelRgba(x, y, 20, 20, 20, 255);
+        }
+      }
+      for (int x = 10; x < 50; x++) {
+        for (int y = 28; y < 34; y++) {
+          testImg.setPixelRgba(x, y, 20, 20, 20, 255);
+        }
+      }
+
+      final rgbaBytes = Uint8List.fromList(
+        testImg.getBytes(order: img.ChannelOrder.rgba),
+      );
+
+      const vectorizer = PotraceVectorizer();
+      final result = await vectorizer.vectorizeImage(
+        rgbaBytes: rgbaBytes,
+        width: 64,
+        height: 64,
+        maxPaths: 100,
+      );
+
+      expect(result.flatStrokeBuffer, isNotNull);
+      final buf = result.flatStrokeBuffer!;
+      expect(buf.strokeCount, greaterThan(0));
+      expect(buf.totalPoints, greaterThan(0));
+      expect(buf.pointsXY.length, equals(buf.totalPoints * 2));
+      expect(buf.widths.length, equals(buf.totalPoints));
+      expect(buf.offsets.length, equals(buf.strokeCount + 1));
+      expect(buf.strokeLengths.length, equals(buf.strokeCount));
+
+      // Test binary search lowerBound and partial stroke interpolation
+      for (int s = 0; s < buf.strokeCount; s++) {
+        final pts0 = buf.getPartialStrokePoints(s, 0.0, 1.0, 1.0);
+        expect(pts0, isNotEmpty);
+        final ptsHalf = buf.getPartialStrokePoints(s, 0.5, 1.0, 1.0);
+        expect(ptsHalf, isNotEmpty);
+        final ptsFull = buf.getPartialStrokePoints(s, 1.0, 1.0, 1.0);
+        expect(ptsFull.length, greaterThanOrEqualTo(ptsHalf.length));
+      }
+    });
   });
 }

@@ -1481,254 +1481,497 @@ void native_cielab_magic_wand(
 }
 
 // ============================================================================
-// Autodraw Engine (Potrace Vectorization: Background -> Midtones -> Highlights)
+// Autodraw Engine V3 (Centerline Skeletonization, Guo-Hall Thinning, Zero-Copy FFI)
 // ============================================================================
 
-struct PotraceInternalPoint {
+struct SkeletonPoint {
     float x;
     float y;
+    float width;
 };
 
-struct potrace_path_s {
-    PotracePath path;
-    struct potrace_path_s* next;
-};
-typedef struct potrace_path_s potrace_path_t;
+// Ramer-Douglas-Peucker (RDP) polyline simplification
+static void rdp_simplify(
+    const std::vector<SkeletonPoint>& points,
+    int start_idx,
+    int end_idx,
+    float epsilon,
+    std::vector<bool>& keep
+) {
+    if (end_idx <= start_idx + 1) return;
 
-PotraceResult* native_potrace_trace(
+    float max_dist = 0.0f;
+    int max_idx = start_idx;
+
+    float x1 = points[start_idx].x;
+    float y1 = points[start_idx].y;
+    float x2 = points[end_idx].x;
+    float y2 = points[end_idx].y;
+
+    float dx = x2 - x1;
+    float dy = y2 - y1;
+    float len_sq = dx * dx + dy * dy;
+
+    for (int i = start_idx + 1; i < end_idx; ++i) {
+        float px = points[i].x;
+        float py = points[i].y;
+        float dist = 0.0f;
+        if (len_sq < 1e-6f) {
+            float ex = px - x1;
+            float ey = py - y1;
+            dist = std::sqrt(ex * ex + ey * ey);
+        } else {
+            float t = ((px - x1) * dx + (py - y1) * dy) / len_sq;
+            t = std::clamp(t, 0.0f, 1.0f);
+            float proj_x = x1 + t * dx;
+            float proj_y = y1 + t * dy;
+            float ex = px - proj_x;
+            float ey = py - proj_y;
+            dist = std::sqrt(ex * ex + ey * ey);
+        }
+
+        if (dist > max_dist) {
+            max_dist = dist;
+            max_idx = i;
+        }
+    }
+
+    if (max_dist > epsilon) {
+        keep[max_idx] = true;
+        rdp_simplify(points, start_idx, max_idx, epsilon, keep);
+        rdp_simplify(points, max_idx, end_idx, epsilon, keep);
+    }
+}
+
+// Guo-Hall parallel thinning iteration
+static bool guo_hall_iteration(
+    std::vector<uint8_t>& binary,
+    int width,
+    int height,
+    int sub_iter
+) {
+    std::vector<int> to_remove;
+    to_remove.reserve(width * height / 16);
+
+    for (int y = 1; y < height - 1; ++y) {
+        int row_prev = (y - 1) * width;
+        int row_curr = y * width;
+        int row_next = (y + 1) * width;
+
+        for (int x = 1; x < width - 1; ++x) {
+            int p1_idx = row_curr + x;
+            if (binary[p1_idx] == 0) continue;
+
+            // Neighbors in clockwise order around P1:
+            // P9 P2 P3
+            // P8 P1 P4
+            // P7 P6 P5
+            int p2 = binary[row_prev + x];
+            int p3 = binary[row_prev + x + 1];
+            int p4 = binary[row_curr + x + 1];
+            int p5 = binary[row_next + x + 1];
+            int p6 = binary[row_next + x];
+            int p7 = binary[row_next + x - 1];
+            int p8 = binary[row_curr + x - 1];
+            int p9 = binary[row_prev + x - 1];
+
+            // Condition 1: Connectivity number C(P1) == 1
+            // C = ~p2&(p3|p4) + ~p4&(p5|p6) + ~p6&(p7|p8) + ~p8&(p9|p2)
+            int c = ((!p2 && (p3 || p4)) ? 1 : 0) +
+                    ((!p4 && (p5 || p6)) ? 1 : 0) +
+                    ((!p6 && (p7 || p8)) ? 1 : 0) +
+                    ((!p8 && (p9 || p2)) ? 1 : 0);
+            if (c != 1) continue;
+
+            // Condition 2: 2 <= min(N1, N2) <= 3
+            int n1 = (p9 || p2) + (p3 || p4) + (p5 || p6) + (p7 || p8);
+            int n2 = (p2 || p3) + (p4 || p5) + (p6 || p7) + (p8 || p9);
+            int min_n = std::min(n1, n2);
+            if (min_n < 2 || min_n > 3) continue;
+
+            // Condition 3: Sub-iteration dependent neighbor condition
+            if (sub_iter == 0) {
+                if (((p2 || p3 || !p5) && p4) != 0) continue;
+            } else {
+                if (((p6 || p7 || !p9) && p8) != 0) continue;
+            }
+
+            to_remove.push_back(p1_idx);
+        }
+    }
+
+    for (int idx : to_remove) {
+        binary[idx] = 0;
+    }
+
+    return !to_remove.empty();
+}
+
+StrokeBuffer* native_skeleton_trace(
     const uint8_t* rgba,
     int width,
     int height,
-    int max_paths
+    int max_strokes
 ) {
     if (!rgba || width <= 0 || height <= 0) return nullptr;
-    if (max_paths <= 0) max_paths = 3000;
+    if (max_strokes <= 0) max_strokes = 2500;
 
-    // Convert image to strict 1-bit potrace_bitmap_s (luminance < 128 ? 1 : 0)
-    potrace_bitmap_s bm;
-    bm.w = width;
-    bm.h = height;
-    bm.dy = (width + 7) / 8;
-    std::vector<uint8_t> bm_bits(width * height, 0);
-    bm.map = bm_bits.data();
+    // 1. Downscale to max 1024px for cache locality & bounded latency
+    int max_dim = std::max(width, height);
+    float scale = (max_dim > 1024) ? (1024.0f / max_dim) : 1.0f;
+    int proc_w = std::max(1, static_cast<int>(std::round(width * scale)));
+    int proc_h = std::max(1, static_cast<int>(std::round(height * scale)));
 
-    std::vector<uint8_t> lum(width * height);
-    for (int i = 0; i < width * height; ++i) {
-        int r = rgba[i * 4];
-        int g = rgba[i * 4 + 1];
-        int b = rgba[i * 4 + 2];
-        float l = 0.299f * r + 0.587f * g + 0.114f * b;
-        lum[i] = static_cast<uint8_t>(l);
-        bm.map[i] = (l < 128.0f) ? 1 : 0;
+    std::vector<uint8_t> lum(proc_w * proc_h);
+    float inv_scale = 1.0f / scale;
+
+    for (int py = 0; py < proc_h; ++py) {
+        int sy = std::min(static_cast<int>(py * inv_scale), height - 1);
+        int proc_row = py * proc_w;
+        int src_row = sy * width;
+        for (int px = 0; px < proc_w; ++px) {
+            int sx = std::min(static_cast<int>(px * inv_scale), width - 1);
+            int s_idx = (src_row + sx) * 4;
+            float l = 0.299f * rgba[s_idx] + 0.587f * rgba[s_idx + 1] + 0.114f * rgba[s_idx + 2];
+            lum[proc_row + px] = static_cast<uint8_t>(std::clamp(l, 0.0f, 255.0f));
+        }
     }
 
-    potrace_path_t* plist_head = nullptr;
-    potrace_path_t* plist_tail = nullptr;
-    int total_extracted = 0;
-
-    auto append_path_node = [&](const PotracePath& p) {
-        potrace_path_t* node = new potrace_path_t();
-        node->path = p;
-        node->next = nullptr;
-        if (!plist_head) {
-            plist_head = node;
-            plist_tail = node;
-        } else {
-            plist_tail->next = node;
-            plist_tail = node;
+    // 2. Integral image adaptive thresholding
+    std::vector<uint32_t> integral((proc_w + 1) * (proc_h + 1), 0);
+    for (int y = 0; y < proc_h; ++y) {
+        uint32_t row_sum = 0;
+        int i_row = (y + 1) * (proc_w + 1);
+        int i_prev = y * (proc_w + 1);
+        int lum_row = y * proc_w;
+        for (int x = 0; x < proc_w; ++x) {
+            row_sum += lum[lum_row + x];
+            integral[i_row + x + 1] = integral[i_prev + x + 1] + row_sum;
         }
-        total_extracted++;
-    };
+    }
 
-    auto trace_tonal_band = [&](int band, float stroke_w, int target_limit) {
-        std::vector<uint8_t> mask(width * height, 0);
-        int band_count = 0;
-        uint64_t sum_r = 0, sum_g = 0, sum_b = 0;
-        for (int i = 0; i < width * height; ++i) {
-            uint8_t l = lum[i];
-            bool in_band = false;
-            if (band == POTRACE_LAYER_BACKGROUND) {
-                in_band = (l < 85);
-            } else if (band == POTRACE_LAYER_MIDTONES) {
-                in_band = (l >= 85 && l < 170);
-            } else {
-                in_band = (l >= 170);
-            }
-            if (in_band) {
-                mask[i] = 1;
-                band_count++;
-                sum_r += rgba[i * 4];
-                sum_g += rgba[i * 4 + 1];
-                sum_b += rgba[i * 4 + 2];
+    std::vector<uint8_t> binary(proc_w * proc_h, 0);
+    int window_r = std::max(8, std::max(proc_w, proc_h) / 32);
+
+    for (int y = 0; y < proc_h; ++y) {
+        int y1 = std::max(0, y - window_r);
+        int y2 = std::min(proc_h - 1, y + window_r);
+        int row_off = y * proc_w;
+
+        for (int x = 0; x < proc_w; ++x) {
+            int x1 = std::max(0, x - window_r);
+            int x2 = std::min(proc_w - 1, x + window_r);
+
+            uint32_t count = (x2 - x1 + 1) * (y2 - y1 + 1);
+            uint32_t sum = integral[(y2 + 1) * (proc_w + 1) + (x2 + 1)] -
+                           integral[y1 * (proc_w + 1) + (x2 + 1)] -
+                           integral[(y2 + 1) * (proc_w + 1) + x1] +
+                           integral[y1 * (proc_w + 1) + x1];
+
+            float avg = static_cast<float>(sum) / count;
+            // Dark foreground lines
+            if (lum[row_off + x] < avg * 0.90f) {
+                binary[row_off + x] = 1;
             }
         }
-        if (band_count == 0) return;
+    }
 
-        uint32_t avg_color = 0xFF000000;
-        if (band_count > 0) {
-            uint8_t ar = static_cast<uint8_t>(sum_r / band_count);
-            uint8_t ag = static_cast<uint8_t>(sum_g / band_count);
-            uint8_t ab = static_cast<uint8_t>(sum_b / band_count);
-            avg_color = (static_cast<uint32_t>(ar) << 24) |
-                        (static_cast<uint32_t>(ag) << 16) |
-                        (static_cast<uint32_t>(ab) << 8) | 0xFF;
+    // 3. Medial Axis Distance Transform (2-pass Chamfer distance)
+    std::vector<float> dist(proc_w * proc_h, 9999.0f);
+    for (int i = 0; i < proc_w * proc_h; ++i) {
+        if (binary[i] == 0) dist[i] = 0.0f;
+    }
+
+    // Forward pass
+    for (int y = 1; y < proc_h; ++y) {
+        int r_curr = y * proc_w;
+        int r_prev = (y - 1) * proc_w;
+        for (int x = 1; x < proc_w - 1; ++x) {
+            if (binary[r_curr + x] == 0) continue;
+            float d = dist[r_curr + x];
+            d = std::min(d, dist[r_curr + x - 1] + 1.0f);
+            d = std::min(d, dist[r_prev + x] + 1.0f);
+            d = std::min(d, dist[r_prev + x - 1] + 1.414f);
+            d = std::min(d, dist[r_prev + x + 1] + 1.414f);
+            dist[r_curr + x] = d;
         }
+    }
 
-        std::vector<uint8_t> visited(width * height, 0);
-        int band_paths = 0;
+    // Backward pass
+    for (int y = proc_h - 2; y >= 0; --y) {
+        int r_curr = y * proc_w;
+        int r_next = (y + 1) * proc_w;
+        for (int x = proc_w - 2; x >= 1; --x) {
+            if (binary[r_curr + x] == 0) continue;
+            float d = dist[r_curr + x];
+            d = std::min(d, dist[r_curr + x + 1] + 1.0f);
+            d = std::min(d, dist[r_next + x] + 1.0f);
+            d = std::min(d, dist[r_next + x + 1] + 1.414f);
+            d = std::min(d, dist[r_next + x - 1] + 1.414f);
+            dist[r_curr + x] = d;
+        }
+    }
 
-        for (int y = 1; y < height - 1; ++y) {
-            for (int x = 1; x < width - 1; ++x) {
-                if (band_paths >= target_limit || total_extracted >= max_paths) break;
-                int idx = y * width + x;
-                if (!mask[idx] || visited[idx]) continue;
+    // 4. Guo-Hall Thinning (Parallel skeletonization)
+    std::vector<uint8_t> skeleton = binary;
+    for (int iter = 0; iter < 48; ++iter) {
+        bool c1 = guo_hall_iteration(skeleton, proc_w, proc_h, 0);
+        bool c2 = guo_hall_iteration(skeleton, proc_w, proc_h, 1);
+        if (!c1 && !c2) break;
+    }
 
-                // Check boundary edge
-                bool is_edge = (!mask[idx - 1] || !mask[idx + 1] ||
-                                !mask[idx - width] || !mask[idx + width]);
-                if (!is_edge) continue;
+    // 5. 256x256 Tone Coverage Buffer
+    const int COV_SIZE = 256;
+    std::vector<float> cov_target(COV_SIZE * COV_SIZE, 0.0f);
+    std::vector<float> cov_drawn(COV_SIZE * COV_SIZE, 0.0f);
 
-                std::vector<PotraceInternalPoint> contour;
-                int curr_x = x;
-                int curr_y = y;
-                for (int step = 0; step < 64; ++step) {
-                    visited[curr_y * width + curr_x] = 1;
-                    contour.push_back({static_cast<float>(curr_x), static_cast<float>(curr_y)});
+    float sx_cov = static_cast<float>(COV_SIZE) / proc_w;
+    float sy_cov = static_cast<float>(COV_SIZE) / proc_h;
 
-                    int next_x = -1, next_y = -1;
-                    const int dx[8] = {1, 1, 0, -1, -1, -1, 0, 1};
-                    const int dy[8] = {0, 1, 1, 1, 0, -1, -1, -1};
-                    for (int d = 0; d < 8; ++d) {
-                        int nx = curr_x + dx[d];
-                        int ny = curr_y + dy[d];
-                        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                            int nidx = ny * width + nx;
-                            if (mask[nidx] && !visited[nidx]) {
-                                next_x = nx;
-                                next_y = ny;
-                                break;
-                            }
-                        }
+    for (int y = 0; y < proc_h; ++y) {
+        int cy = std::min(static_cast<int>(y * sy_cov), COV_SIZE - 1);
+        int p_row = y * proc_w;
+        int c_row = cy * COV_SIZE;
+        for (int x = 0; x < proc_w; ++x) {
+            int cx = std::min(static_cast<int>(x * sx_cov), COV_SIZE - 1);
+            cov_target[c_row + cx] += (1.0f - lum[p_row + x] / 255.0f);
+        }
+    }
+
+    // 6. Polyline Walking, Spur Pruning & RDP Simplification
+    std::vector<uint8_t> visited(proc_w * proc_h, 0);
+    std::vector<std::vector<SkeletonPoint>> candidate_strokes;
+
+    // First, identify endpoints (degree 1) to start strokes cleanly
+    std::vector<int> start_nodes;
+    for (int y = 1; y < proc_h - 1; ++y) {
+        int r_curr = y * proc_w;
+        int r_prev = (y - 1) * proc_w;
+        int r_next = (y + 1) * proc_w;
+        for (int x = 1; x < proc_w - 1; ++x) {
+            int idx = r_curr + x;
+            if (skeleton[idx] == 0) continue;
+            int deg = skeleton[r_prev + x - 1] + skeleton[r_prev + x] + skeleton[r_prev + x + 1] +
+                      skeleton[r_curr + x - 1] + skeleton[r_curr + x + 1] +
+                      skeleton[r_next + x - 1] + skeleton[r_next + x] + skeleton[r_next + x + 1];
+            if (deg == 1) {
+                start_nodes.push_back(idx);
+            }
+        }
+    }
+
+    // Also add all remaining skeleton pixels as secondary starts
+    for (int y = 1; y < proc_h - 1; ++y) {
+        int r_curr = y * proc_w;
+        for (int x = 1; x < proc_w - 1; ++x) {
+            int idx = r_curr + x;
+            if (skeleton[idx] == 1) {
+                start_nodes.push_back(idx);
+            }
+        }
+    }
+
+    const int dx8[8] = {1, 1, 0, -1, -1, -1, 0, 1};
+    const int dy8[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+
+    for (int start_idx : start_nodes) {
+        if (visited[start_idx] || skeleton[start_idx] == 0) continue;
+
+        std::vector<SkeletonPoint> polyline;
+        int curr_idx = start_idx;
+        int curr_x = curr_idx % proc_w;
+        int curr_y = curr_idx / proc_w;
+
+        for (int step = 0; step < 256; ++step) {
+            visited[curr_idx] = 1;
+
+            float w_val = std::clamp(dist[curr_idx] * 2.0f * inv_scale, 1.0f, 25.0f);
+            polyline.push_back({
+                curr_x * inv_scale,
+                curr_y * inv_scale,
+                w_val
+            });
+
+            int next_idx = -1;
+            int next_x = -1, next_y = -1;
+            for (int d = 0; d < 8; ++d) {
+                int nx = curr_x + dx8[d];
+                int ny = curr_y + dy8[d];
+                if (nx >= 0 && nx < proc_w && ny >= 0 && ny < proc_h) {
+                    int nidx = ny * proc_w + nx;
+                    if (skeleton[nidx] == 1 && !visited[nidx]) {
+                        next_idx = nidx;
+                        next_x = nx;
+                        next_y = ny;
+                        break;
                     }
-                    if (next_x == -1) break;
-                    curr_x = next_x;
-                    curr_y = next_y;
                 }
-
-                if (contour.size() < 2) continue;
-
-                std::vector<PotraceInternalPoint> simplified;
-                simplified.push_back(contour.front());
-                for (size_t k = 2; k < contour.size() - 1; k += 2) {
-                    simplified.push_back(contour[k]);
-                }
-                simplified.push_back(contour.back());
-
-                int num_segs = static_cast<int>(simplified.size()) - 1;
-                if (num_segs <= 0) continue;
-
-                PotraceBezierSegment* segs = new PotraceBezierSegment[num_segs];
-                for (int s = 0; s < num_segs; ++s) {
-                    PotraceInternalPoint p0 = simplified[s];
-                    PotraceInternalPoint p3 = simplified[s + 1];
-
-                    PotraceInternalPoint prev = (s > 0) ? simplified[s - 1] : p0;
-                    PotraceInternalPoint next = (s + 2 < static_cast<int>(simplified.size())) ? simplified[s + 2] : p3;
-
-                    float t0_x = (p3.x - prev.x) * 0.35f;
-                    float t0_y = (p3.y - prev.y) * 0.35f;
-                    float t3_x = (next.x - p0.x) * 0.35f;
-                    float t3_y = (next.y - p0.y) * 0.35f;
-
-                    segs[s].cp1x = p0.x + t0_x / 3.0f;
-                    segs[s].cp1y = p0.y + t0_y / 3.0f;
-                    segs[s].cp2x = p3.x - t3_x / 3.0f;
-                    segs[s].cp2y = p3.y - t3_y / 3.0f;
-                    segs[s].endx = p3.x;
-                    segs[s].endy = p3.y;
-                }
-
-                // Sample local color at start of stroke
-                int start_off = (y * width + x) * 4;
-                uint32_t local_color = (static_cast<uint32_t>(rgba[start_off]) << 24) |
-                                      (static_cast<uint32_t>(rgba[start_off + 1]) << 16) |
-                                      (static_cast<uint32_t>(rgba[start_off + 2]) << 8) | 0xFF;
-
-                PotracePath p;
-                p.tonal_layer = band;
-                p.color_rgba = local_color;
-                p.stroke_width = stroke_w;
-                p.start_x = simplified[0].x;
-                p.start_y = simplified[0].y;
-                p.segment_count = num_segs;
-                p.segments = segs;
-
-                append_path_node(p);
-                band_paths++;
             }
+
+            if (next_idx == -1) break;
+            curr_idx = next_idx;
+            curr_x = next_x;
+            curr_y = next_y;
         }
+
+        // Spur pruning: remove short parasitic branches (< 6px)
+        float total_len = 0.0f;
+        for (size_t i = 1; i < polyline.size(); ++i) {
+            float ddx = polyline[i].x - polyline[i - 1].x;
+            float ddy = polyline[i].y - polyline[i - 1].y;
+            total_len += std::sqrt(ddx * ddx + ddy * ddy);
+        }
+        if (total_len < 6.0f || polyline.size() < 2) continue;
+
+        // RDP polyline simplification (epsilon = 1.2px)
+        std::vector<bool> keep(polyline.size(), false);
+        keep.front() = true;
+        keep.back() = true;
+        rdp_simplify(polyline, 0, static_cast<int>(polyline.size()) - 1, 1.2f, keep);
+
+        std::vector<SkeletonPoint> simplified;
+        for (size_t i = 0; i < polyline.size(); ++i) {
+            if (keep[i]) simplified.push_back(polyline[i]);
+        }
+
+        if (simplified.size() < 2) continue;
+
+        // Tone Coverage Check: skip redundant hatching strokes if local luminance budget already met
+        float stroke_cov_need = 0.0f;
+        float stroke_cov_have = 0.0f;
+        for (const auto& pt : simplified) {
+            int cx = std::clamp(static_cast<int>(pt.x * scale * sx_cov), 0, COV_SIZE - 1);
+            int cy = std::clamp(static_cast<int>(pt.y * scale * sy_cov), 0, COV_SIZE - 1);
+            int c_idx = cy * COV_SIZE + cx;
+            stroke_cov_need += cov_target[c_idx];
+            stroke_cov_have += cov_drawn[c_idx];
+        }
+
+        if (stroke_cov_need > 0.01f && (stroke_cov_have / stroke_cov_need) > 0.92f) {
+            continue; // Area already fully shaded, prevent overworked ink
+        }
+
+        // Record ink deposit into coverage buffer
+        for (const auto& pt : simplified) {
+            int cx = std::clamp(static_cast<int>(pt.x * scale * sx_cov), 0, COV_SIZE - 1);
+            int cy = std::clamp(static_cast<int>(pt.y * scale * sy_cov), 0, COV_SIZE - 1);
+            cov_drawn[cy * COV_SIZE + cx] += 1.0f;
+        }
+
+        candidate_strokes.push_back(simplified);
+    }
+
+    // 7. Graph Ordering: Greedy nearest-endpoint TSP (Large structures first)
+    if (candidate_strokes.empty()) {
+        // Fallback single line to prevent empty buffer
+        std::vector<SkeletonPoint> fb;
+        fb.push_back({0.0f, 0.0f, 2.0f});
+        fb.push_back({static_cast<float>(width), static_cast<float>(height), 2.0f});
+        candidate_strokes.push_back(fb);
+    }
+
+    // Sort candidate strokes by length in descending order (major structures first)
+    auto stroke_len = [](const std::vector<SkeletonPoint>& st) -> float {
+        float l = 0.0f;
+        for (size_t i = 1; i < st.size(); ++i) {
+            float ddx = st[i].x - st[i - 1].x;
+            float ddy = st[i].y - st[i - 1].y;
+            l += std::sqrt(ddx * ddx + ddy * ddy);
+        }
+        return l;
     };
 
-    const int per_band_limit = std::max(10, (max_paths / 3) + 1);
-    trace_tonal_band(POTRACE_LAYER_BACKGROUND, 2.5f, per_band_limit);
-    trace_tonal_band(POTRACE_LAYER_MIDTONES, 2.0f, per_band_limit);
-    trace_tonal_band(POTRACE_LAYER_HIGHLIGHTS, 1.5f, per_band_limit);
+    std::sort(candidate_strokes.begin(), candidate_strokes.end(),
+              [&](const std::vector<SkeletonPoint>& a, const std::vector<SkeletonPoint>& b) {
+                  return stroke_len(a) > stroke_len(b);
+              });
 
-    if (total_extracted == 0) {
-        // Fallback boundary stroke to prevent 0 strokes on uniform/flat images
-        PotracePath p;
-        p.tonal_layer = POTRACE_LAYER_MIDTONES;
-        p.color_rgba = 0xFF808080;
-        p.stroke_width = 2.0f;
-        p.start_x = 0.0f;
-        p.start_y = 0.0f;
-        p.segment_count = 4;
-        p.segments = new PotraceBezierSegment[4];
-        float fw = static_cast<float>(width);
-        float fh = static_cast<float>(height);
-        p.segments[0] = {fw * 0.33f, 0.0f, fw * 0.66f, 0.0f, fw, 0.0f};
-        p.segments[1] = {fw, fh * 0.33f, fw, fh * 0.66f, fw, fh};
-        p.segments[2] = {fw * 0.66f, fh, fw * 0.33f, fh, 0.0f, fh};
-        p.segments[3] = {0.0f, fh * 0.66f, 0.0f, fh * 0.33f, 0.0f, 0.0f};
-        append_path_node(p);
+    if (candidate_strokes.size() > static_cast<size_t>(max_strokes)) {
+        candidate_strokes.resize(max_strokes);
     }
 
-    // Traverse the Potrace linked list (potrace_path_t* path = path->next) across all bands
-    std::vector<PotracePath> flattened;
-    flattened.reserve(total_extracted);
+    std::vector<std::vector<SkeletonPoint>> ordered_strokes;
+    std::vector<bool> used(candidate_strokes.size(), false);
 
-    for (potrace_path_t* path = plist_head; path != nullptr; ) {
-        flattened.push_back(path->path);
-        potrace_path_t* next_node = path->next;
-        delete path;
-        path = next_node;
-    }
+    // Start with the longest primary structure
+    ordered_strokes.push_back(candidate_strokes[0]);
+    used[0] = true;
+    float pen_x = candidate_strokes[0].back().x;
+    float pen_y = candidate_strokes[0].back().y;
 
-    if (flattened.size() > static_cast<size_t>(max_paths)) {
-        for (size_t i = max_paths; i < flattened.size(); ++i) {
-            delete[] flattened[i].segments;
+    for (size_t step = 1; step < candidate_strokes.size(); ++step) {
+        float min_dist_sq = 1e12f;
+        int best_idx = -1;
+        bool reverse_stroke = false;
+
+        for (size_t i = 0; i < candidate_strokes.size(); ++i) {
+            if (used[i]) continue;
+            float d1_x = candidate_strokes[i].front().x - pen_x;
+            float d1_y = candidate_strokes[i].front().y - pen_y;
+            float dist1 = d1_x * d1_x + d1_y * d1_y;
+
+            float d2_x = candidate_strokes[i].back().x - pen_x;
+            float d2_y = candidate_strokes[i].back().y - pen_y;
+            float dist2 = d2_x * d2_x + d2_y * d2_y;
+
+            if (dist1 < min_dist_sq) {
+                min_dist_sq = dist1;
+                best_idx = static_cast<int>(i);
+                reverse_stroke = false;
+            }
+            if (dist2 < min_dist_sq) {
+                min_dist_sq = dist2;
+                best_idx = static_cast<int>(i);
+                reverse_stroke = true;
+            }
         }
-        flattened.resize(max_paths);
+
+        if (best_idx == -1) break;
+        used[best_idx] = true;
+
+        if (reverse_stroke) {
+            std::reverse(candidate_strokes[best_idx].begin(), candidate_strokes[best_idx].end());
+        }
+        ordered_strokes.push_back(candidate_strokes[best_idx]);
+        pen_x = candidate_strokes[best_idx].back().x;
+        pen_y = candidate_strokes[best_idx].back().y;
     }
 
-    PotraceResult* res = new PotraceResult();
-    res->path_count = static_cast<int>(flattened.size());
-    res->paths = new PotracePath[flattened.size()];
-    for (size_t i = 0; i < flattened.size(); ++i) {
-        res->paths[i] = flattened[i];
+    // 8. Package into zero-copy StrokeBuffer
+    int stroke_count = static_cast<int>(ordered_strokes.size());
+    int total_points = 0;
+    for (const auto& st : ordered_strokes) {
+        total_points += static_cast<int>(st.size());
     }
-    return res;
+
+    StrokeBuffer* buffer = new StrokeBuffer();
+    buffer->stroke_count = stroke_count;
+    buffer->total_points = total_points;
+    buffer->points_x_y = new int16_t[total_points * 2];
+    buffer->widths = new uint8_t[total_points];
+    buffer->offsets = new uint32_t[stroke_count + 1];
+
+    int point_idx = 0;
+    for (int s = 0; s < stroke_count; ++s) {
+        buffer->offsets[s] = static_cast<uint32_t>(point_idx);
+        for (const auto& pt : ordered_strokes[s]) {
+            buffer->points_x_y[point_idx * 2]     = static_cast<int16_t>(std::clamp(std::round(pt.x), 0.0f, 32767.0f));
+            buffer->points_x_y[point_idx * 2 + 1] = static_cast<int16_t>(std::clamp(std::round(pt.y), 0.0f, 32767.0f));
+            buffer->widths[point_idx]             = static_cast<uint8_t>(std::clamp(std::round(pt.width), 1.0f, 255.0f));
+            point_idx++;
+        }
+    }
+    buffer->offsets[stroke_count] = static_cast<uint32_t>(point_idx);
+
+    return buffer;
 }
 
-void native_potrace_free(PotraceResult* result) {
-    if (!result) return;
-    if (result->paths) {
-        for (int i = 0; i < result->path_count; ++i) {
-            delete[] result->paths[i].segments;
-        }
-        delete[] result->paths;
-    }
-    delete result;
+void native_stroke_buffer_free(StrokeBuffer* buffer) {
+    if (!buffer) return;
+    if (buffer->points_x_y) delete[] buffer->points_x_y;
+    if (buffer->widths) delete[] buffer->widths;
+    if (buffer->offsets) delete[] buffer->offsets;
+    delete buffer;
 }
 
 } // extern "C"

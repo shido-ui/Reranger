@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui';
 
 /// Artist Pipeline Action Type.
@@ -233,6 +234,232 @@ class AutodrawCommand {
   }
 }
 
+/// Zero-copy flat stroke buffer storing centerline skeleton and medial axis widths:
+/// - [pointsXY]: Interleaved coordinates (x0, y0, x1, y1, ...) as int16.
+/// - [widths]: Local medial axis stroke width per point (1 to 25px).
+/// - [offsets]: Prefix offsets marking the start point index of each stroke. Length = strokeCount + 1.
+/// - [strokeLengths]: Pre-computed total arc length per stroke.
+/// - [cumulativeDistances]: Cumulative arc lengths along each stroke for O(log n) binary search.
+class FlatStrokeBuffer {
+  final Int16List pointsXY;
+  final Uint8List widths;
+  final Uint32List offsets;
+  final int strokeCount;
+  final int totalPoints;
+  final Float32List strokeLengths;
+  final List<Float32List> cumulativeDistances;
+
+  FlatStrokeBuffer({
+    required this.pointsXY,
+    required this.widths,
+    required this.offsets,
+    required this.strokeCount,
+    required this.totalPoints,
+    Float32List? strokeLengths,
+    List<Float32List>? cumulativeDistances,
+  }) : strokeLengths =
+           strokeLengths ??
+           _computeStrokeLengths(pointsXY, offsets, strokeCount),
+       cumulativeDistances =
+           cumulativeDistances ??
+           _computeCumulativeDistances(pointsXY, offsets, strokeCount);
+
+  static Float32List _computeStrokeLengths(
+    Int16List pointsXY,
+    Uint32List offsets,
+    int strokeCount,
+  ) {
+    final lengths = Float32List(strokeCount);
+    for (int s = 0; s < strokeCount; s++) {
+      final startIdx = offsets[s];
+      final endIdx = offsets[s + 1];
+      double len = 0.0;
+      for (int i = startIdx + 1; i < endIdx; i++) {
+        final dx = (pointsXY[i * 2] - pointsXY[(i - 1) * 2]).toDouble();
+        final dy = (pointsXY[i * 2 + 1] - pointsXY[(i - 1) * 2 + 1]).toDouble();
+        len += math.sqrt(dx * dx + dy * dy);
+      }
+      lengths[s] = len > 0 ? len : 1.0;
+    }
+    return lengths;
+  }
+
+  static List<Float32List> _computeCumulativeDistances(
+    Int16List pointsXY,
+    Uint32List offsets,
+    int strokeCount,
+  ) {
+    final list = <Float32List>[];
+    for (int s = 0; s < strokeCount; s++) {
+      final startIdx = offsets[s];
+      final endIdx = offsets[s + 1];
+      final count = endIdx - startIdx;
+      final dists = Float32List(count);
+      if (count > 0) {
+        dists[0] = 0.0;
+        double accum = 0.0;
+        for (int i = 1; i < count; i++) {
+          final curr = startIdx + i;
+          final prev = startIdx + i - 1;
+          final dx = (pointsXY[curr * 2] - pointsXY[prev * 2]).toDouble();
+          final dy = (pointsXY[curr * 2 + 1] - pointsXY[prev * 2 + 1])
+              .toDouble();
+          accum += math.sqrt(dx * dx + dy * dy);
+          dists[i] = accum;
+        }
+      }
+      list.add(dists);
+    }
+    return list;
+  }
+
+  /// Binary search lower_bound on monotonic cumulative arc length array.
+  static int lowerBound(Float32List list, double value) {
+    int low = 0;
+    int high = list.length;
+    while (low < high) {
+      final mid = (low + high) >> 1;
+      if (list[mid] < value) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
+  }
+
+  /// Extracts interpolated sub-pixel polyline points for partial stroke playback at [progress].
+  List<Offset> getPartialStrokePoints(
+    int strokeIndex,
+    double progress,
+    double scaleX,
+    double scaleY,
+  ) {
+    if (strokeIndex < 0 || strokeIndex >= strokeCount) return const [];
+    final startIdx = offsets[strokeIndex];
+    final endIdx = offsets[strokeIndex + 1];
+    final count = endIdx - startIdx;
+    if (count == 0) return const [];
+    if (count == 1 || progress <= 0.0) {
+      return [
+        Offset(
+          pointsXY[startIdx * 2] * scaleX,
+          pointsXY[startIdx * 2 + 1] * scaleY,
+        ),
+      ];
+    }
+    if (progress >= 1.0) {
+      return List<Offset>.generate(count, (i) {
+        final idx = startIdx + i;
+        return Offset(
+          pointsXY[idx * 2] * scaleX,
+          pointsXY[idx * 2 + 1] * scaleY,
+        );
+      });
+    }
+
+    final totalLen = strokeLengths[strokeIndex];
+    final targetLen = totalLen * progress.clamp(0.0, 1.0);
+    final dists = cumulativeDistances[strokeIndex];
+    final ub = lowerBound(dists, targetLen);
+
+    final pts = <Offset>[];
+    final takeCount = math.min(ub, count);
+    for (int i = 0; i < takeCount; i++) {
+      final idx = startIdx + i;
+      pts.add(
+        Offset(pointsXY[idx * 2] * scaleX, pointsXY[idx * 2 + 1] * scaleY),
+      );
+    }
+
+    if (ub > 0 && ub < count) {
+      final prevD = dists[ub - 1];
+      final nextD = dists[ub];
+      final segLen = nextD - prevD;
+      final alpha = segLen > 1e-4
+          ? ((targetLen - prevD) / segLen).clamp(0.0, 1.0)
+          : 0.0;
+      final p0Idx = startIdx + ub - 1;
+      final p1Idx = startIdx + ub;
+      final x =
+          pointsXY[p0Idx * 2] +
+          (pointsXY[p1Idx * 2] - pointsXY[p0Idx * 2]) * alpha;
+      final y =
+          pointsXY[p0Idx * 2 + 1] +
+          (pointsXY[p1Idx * 2 + 1] - pointsXY[p0Idx * 2 + 1]) * alpha;
+      pts.add(Offset(x * scaleX, y * scaleY));
+    }
+
+    return pts;
+  }
+
+  /// Builds a [FlatStrokeBuffer] from pre-computed [AutodrawCommand] list.
+  factory FlatStrokeBuffer.fromCommands(
+    List<AutodrawCommand> commands,
+    int width,
+    int height,
+  ) {
+    final strokeCount = commands.length;
+    final strokePointsList = <List<Offset>>[];
+    final strokeWidthsList = <List<int>>[];
+    int totalPts = 0;
+
+    for (final cmd in commands) {
+      final pts = <Offset>[cmd.startPoint];
+      for (final seg in cmd.segments) {
+        const steps = 4;
+        Offset prev = pts.last;
+        for (int k = 1; k <= steps; k++) {
+          final t = k / steps;
+          final it = 1.0 - t;
+          final x =
+              it * it * it * prev.dx +
+              3 * it * it * t * seg.cp1.dx +
+              3 * it * t * t * seg.cp2.dx +
+              t * t * t * seg.end.dx;
+          final y =
+              it * it * it * prev.dy +
+              3 * it * it * t * seg.cp1.dy +
+              3 * it * t * t * seg.cp2.dy +
+              t * t * t * seg.end.dy;
+          pts.add(Offset(x, y));
+        }
+      }
+      strokePointsList.add(pts);
+      strokeWidthsList.add(
+        List<int>.filled(pts.length, cmd.strokeWidth.round().clamp(1, 25)),
+      );
+      totalPts += pts.length;
+    }
+
+    final pointsXY = Int16List(totalPts * 2);
+    final widths = Uint8List(totalPts);
+    final offsets = Uint32List(strokeCount + 1);
+
+    int curIdx = 0;
+    for (int s = 0; s < strokeCount; s++) {
+      offsets[s] = curIdx;
+      final pts = strokePointsList[s];
+      final ws = strokeWidthsList[s];
+      for (int i = 0; i < pts.length; i++) {
+        pointsXY[curIdx * 2] = pts[i].dx.round().clamp(0, 32767);
+        pointsXY[curIdx * 2 + 1] = pts[i].dy.round().clamp(0, 32767);
+        widths[curIdx] = ws[i];
+        curIdx++;
+      }
+    }
+    offsets[strokeCount] = curIdx;
+
+    return FlatStrokeBuffer(
+      pointsXY: pointsXY,
+      widths: widths,
+      offsets: offsets,
+      strokeCount: strokeCount,
+      totalPoints: totalPts,
+    );
+  }
+}
+
 /// Backwards compatible alias for [AutodrawCommand].
 typedef AutodrawStroke = AutodrawCommand;
 
@@ -241,6 +468,7 @@ class AutodrawVectorizationResult {
   final int width;
   final int height;
   final List<AutodrawCommand> commands;
+  final FlatStrokeBuffer? flatStrokeBuffer;
   List<AutodrawCommand> get strokes => commands;
 
   AutodrawVectorizationResult({
@@ -248,7 +476,12 @@ class AutodrawVectorizationResult {
     required this.height,
     List<AutodrawCommand>? commands,
     List<AutodrawCommand>? strokes,
+    this.flatStrokeBuffer,
   }) : commands = commands ?? strokes ?? const [];
+
+  FlatStrokeBuffer get flatBuffer =>
+      flatStrokeBuffer ??
+      FlatStrokeBuffer.fromCommands(commands, width, height);
 
   /// Verifies that commands are strictly ordered: All Lines -> All Fills -> All Highlights.
   bool get isSortedByTonalLayer {

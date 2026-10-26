@@ -157,52 +157,38 @@ void native_cielab_magic_wand(
 );
 
 // ============================================================================
-// Autodraw Engine (Potrace Vectorization: Background -> Midtones -> Highlights)
+// Autodraw Engine V3 (Centerline Skeletonization, Guo-Hall Thinning, Zero-Copy FFI)
 // ============================================================================
 
-struct potrace_bitmap_s {
-    int w, h;
-    int dy;
-    uint8_t* map; // Strict 1-bit per pixel representation (luminance < 128 ? 1 : 0)
+/// C-compatible zero-copy stroke buffer for Dart FFI.
+/// Points are stored as interleaved int16_t (x0, y0, x1, y1, ...).
+/// Widths store the local medial axis stroke width per point.
+/// Offsets stores the start point index for each stroke (length = stroke_count + 1).
+struct StrokeBuffer {
+    int16_t* points_x_y;
+    uint8_t* widths;
+    uint32_t* offsets;
+    int32_t stroke_count;
+    int32_t total_points;
 };
 
-enum PotraceTonalLayer {
-    POTRACE_LAYER_BACKGROUND = 0,
-    POTRACE_LAYER_MIDTONES = 1,
-    POTRACE_LAYER_HIGHLIGHTS = 2
-};
-
-struct PotraceBezierSegment {
-    float cp1x, cp1y;
-    float cp2x, cp2y;
-    float endx, endy;
-};
-
-struct PotracePath {
-    int tonal_layer;      // 0=Background, 1=Midtones, 2=Highlights
-    uint32_t color_rgba;  // RGBA8888
-    float stroke_width;
-    float start_x, start_y;
-    int segment_count;
-    PotraceBezierSegment* segments;
-};
-
-struct PotraceResult {
-    int path_count;
-    PotracePath* paths;
-};
-
-/// Vectorizes an RGBA8888 bitmap into smooth Bézier curve strokes,
-/// deterministically sorted: Background -> Midtones -> Highlights.
-PotraceResult* native_potrace_trace(
+/// Executes Autodraw V3 centerline skeletonization on RGBA8888 bitmap:
+/// 1. Adaptive downscale to max 1024px & integral adaptive thresholding.
+/// 2. Distance Transform for local medial axis stroke widths.
+/// 3. Guo-Hall thinning for a clean 1-pixel centerline skeleton (no double-loops).
+/// 4. Polyline walking, spur pruning (< 6px), RDP simplification & curve fitting.
+/// 5. Greedy nearest-endpoint TSP stroke ordering (major structures first).
+/// 6. 256px tone coverage buffer to skip overdrawn hatching regions.
+/// Returns zero-copy StrokeBuffer for Dart Pointer<StrokeBuffer>.asTypedList.
+StrokeBuffer* native_skeleton_trace(
     const uint8_t* rgba,
     int width,
     int height,
-    int max_paths
+    int max_strokes
 );
 
-/// Frees all memory allocated by native_potrace_trace.
-void native_potrace_free(PotraceResult* result);
+/// Frees all memory allocated by native_skeleton_trace.
+void native_stroke_buffer_free(StrokeBuffer* buffer);
 
 #ifdef __cplusplus
 }
