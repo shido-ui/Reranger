@@ -190,6 +190,62 @@ class VideoTimelapseRecorder {
     }
   }
 
+  /// Encodes recorded frames directly to the Android MediaStore gallery (Movies/Reranger)
+  /// using MediaMuxer and FileDescriptor, and returns the gallery URI or path.
+  Future<String> stopAndEncodeToGallery({
+    required int width,
+    required int height,
+    int fps = 60,
+    int bitRate = 8000000,
+    String? title,
+  }) async {
+    _isRecording = false;
+
+    if (_framePaths.isEmpty) {
+      await cleanup();
+      throw StateError('No frames were recorded for video encoding.');
+    }
+
+    final videoTitle =
+        title ?? 'reranger_autodraw_${DateTime.now().millisecondsSinceEpoch}';
+
+    try {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        try {
+          final res = await _mediaChannel.invokeMethod<String>(
+            'encodeFramesToGallery',
+            {
+              'framePaths': _framePaths,
+              'title': videoTitle,
+              'width': width,
+              'height': height,
+              'fps': fps,
+              'bitRate': bitRate,
+            },
+          );
+          if (res != null) {
+            return res;
+          }
+        } on MissingPluginException {
+          // Fall through to standalone stitcher in test / headless mode
+        } on PlatformException {
+          // Fall through
+        }
+      }
+
+      // Standalone / Test environment fallback: encode to MP4 and save to gallery
+      final mp4Path = await stopAndEncode(
+        width: width,
+        height: height,
+        fps: fps,
+        bitRate: bitRate,
+      );
+      return await saveVideoToGallery(mp4Path: mp4Path, title: videoTitle);
+    } finally {
+      await cleanup();
+    }
+  }
+
   /// Saves the generated .mp4 video to the user's gallery using MediaStore logic.
   Future<String> saveVideoToGallery({
     required String mp4Path,

@@ -240,29 +240,25 @@ class _AutodrawScreenState extends State<AutodrawScreen>
       if (exportWidth % 2 != 0) exportWidth -= 1;
       if (exportHeight % 2 != 0) exportHeight -= 1;
 
-      // Encode frames via hardware MediaCodec (or fallback stitcher) at 1080p 60fps
-      final mp4Path = await _recorder.stopAndEncode(
+      // Encode frames directly via MediaStore MediaMuxer / FileDescriptor to Movies/Reranger
+      final galleryPath = await _recorder.stopAndEncodeToGallery(
         width: exportWidth,
         height: exportHeight,
         fps: 60,
         bitRate: 8000000,
-      );
-
-      // Save to user gallery MediaStore
-      final galleryPath = await _recorder.saveVideoToGallery(
-        mp4Path: mp4Path,
         title: 'reranger_autodraw_${widget.projectId}_1080p60',
       );
+      debugPrint('[AutodrawScreen] Video saved to gallery: $galleryPath');
 
       if (mounted) {
         setState(() {
           _isEncoding = false;
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Video saved to gallery! ($galleryPath)'),
+          const SnackBar(
+            content: Text('Video saved to Gallery!'),
             backgroundColor: Colors.green,
-            duration: const Duration(seconds: 3),
+            duration: Duration(seconds: 3),
           ),
         );
       }
@@ -362,7 +358,13 @@ class _AutodrawScreenState extends State<AutodrawScreen>
                   children: [
                     CircularProgressIndicator(),
                     SizedBox(height: AppSpacingTokens.md),
-                    Text('Vectorizing Bézier strokes on background isolate...'),
+                    Text(
+                      'Preparing artist sequence...',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
                   ],
                 ),
               )
@@ -610,12 +612,13 @@ class AutodrawPainter extends CustomPainter {
     this.renderCache,
   });
 
-  /// Draws an artist-grade brush stroke using [ui.PathMetric] with dynamic pressure
-  /// tapering (0.5px start -> 2.2px mid -> 0.5px end), tail opacity fade, and [BlendMode.multiply]
-  /// for realistic ink & watercolor blending.
+  /// Draws an artist-grade brush stroke:
+  /// - Pass 1 (Lines): Crisp contour ink sketch (strokeWidth = 1.5).
+  /// - Pass 2 (Fills): Broad painterly color brush strokes and closed region fills.
+  /// - Pass 3 (Highlights): Crisp gleaming highlight strokes.
   static void drawTaperedStroke({
     required Canvas canvas,
-    required AutodrawStroke stroke,
+    required AutodrawCommand stroke,
     required double scaleX,
     required double scaleY,
     required double progress,
@@ -623,11 +626,35 @@ class AutodrawPainter extends CustomPainter {
     if (progress <= 0.0) return;
 
     final scaledPath = stroke.toScaledPath(scaleX, scaleY);
+
+    // If it's a closed fill region and progress has reached completion, fill the interior
+    if (stroke.actionType == AutodrawActionType.fillRegion &&
+        stroke.isClosed &&
+        progress >= 0.85) {
+      final fillAlpha = ((progress - 0.85) / 0.15).clamp(0.0, 1.0);
+      final fillPaint = Paint()
+        ..style = PaintingStyle.fill
+        ..blendMode = BlendMode.srcOver
+        ..color = stroke.strokeColor.withValues(
+          alpha: (stroke.strokeColor.a * 0.88 * fillAlpha).clamp(0.0, 1.0),
+        );
+      canvas.drawPath(scaledPath, fillPaint);
+    }
+
     final metrics = scaledPath.computeMetrics().toList();
     if (metrics.isEmpty) return;
 
     final baseColor = stroke.strokeColor;
-    final maxAllowedWidth = stroke.strokeWidth.clamp(1.8, 2.4);
+    final isFill = stroke.actionType == AutodrawActionType.fillRegion;
+    final isLine = stroke.actionType == AutodrawActionType.drawLine;
+
+    final maxAllowedWidth = isFill
+        ? stroke.strokeWidth.clamp(6.0, 16.0)
+        : isLine
+        ? stroke.strokeWidth.clamp(1.2, 2.0)
+        : stroke.strokeWidth.clamp(1.5, 2.5);
+
+    final minWidth = isFill ? (maxAllowedWidth * 0.45) : 0.5;
 
     for (final metric in metrics) {
       final totalLen = metric.length;
@@ -637,7 +664,7 @@ class AutodrawPainter extends CustomPainter {
       if (targetLen <= 0) continue;
 
       // Adaptive segment subdivision (3.0 - 7.0 logical px) for smooth curvature and tapering
-      final stepLen = (targetLen / 16.0).clamp(3.0, 7.0);
+      final stepLen = (targetLen / 16.0).clamp(3.0, 8.0);
       final segmentCount = (targetLen / stepLen).ceil().clamp(1, 48);
 
       for (int i = 0; i < segmentCount; i++) {
@@ -651,28 +678,26 @@ class AutodrawPainter extends CustomPainter {
         final midD = (startD + endD) * 0.5;
         final t = (midD / totalLen).clamp(0.0, 1.0);
 
-        // Mandate 1: Brush Dynamics - Interpolate strokeWidth based on position
-        // Thin at start (0.5px), thick in middle (~2.0-2.2px), tapering off at end (0.5px)
+        // Brush Dynamics: Interpolate strokeWidth based on position
         final pressure = math.sin(math.pi * t);
-        final strokeWidth = 0.5 + (maxAllowedWidth - 0.5) * pressure;
+        final strokeWidth = minWidth + (maxAllowedWidth - minWidth) * pressure;
 
-        // Mandate 1: Opacity fade at the tail end of the stroke (t > 0.8)
+        // Tail opacity fade
         double opacity = 1.0;
-        if (t > 0.8) {
+        if (t > 0.8 && !isFill) {
           final fadeFactor = (t - 0.8) / 0.2; // 0.0 to 1.0
-          opacity = 1.0 - (0.45 * fadeFactor); // 1.0 down to 0.55
+          opacity = 1.0 - (0.45 * fadeFactor);
         }
 
         final segColor = baseColor.withValues(
           alpha: (baseColor.a * opacity).clamp(0.0, 1.0),
         );
 
-        // Mandate 2: Realistic Ink Blending - Paint()..blendMode = BlendMode.multiply
         final paint = Paint()
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round
           ..strokeJoin = StrokeJoin.round
-          ..blendMode = BlendMode.multiply
+          ..blendMode = isFill ? BlendMode.srcOver : BlendMode.multiply
           ..color = segColor
           ..strokeWidth = strokeWidth;
 

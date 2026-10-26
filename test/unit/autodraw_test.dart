@@ -464,8 +464,12 @@ void main() {
 
       expect(result.strokes, isNotEmpty);
 
-      // 4. The Proof: Assert that the generated AutodrawStroke colors are RED, NOT GREY
-      for (final stroke in result.strokes) {
+      // 4. The Proof: Assert that the generated color fills paint using shader-processed colors (RED, NOT GREY)
+      final fillStrokes = result.strokes.where(
+        (s) => s.actionType == AutodrawActionType.fillRegion,
+      );
+      expect(fillStrokes, isNotEmpty);
+      for (final stroke in fillStrokes) {
         final c = stroke.strokeColor;
         final r255 = (c.r * 255.0).round().clamp(0, 255);
         final g255 = (c.g * 255.0).round().clamp(0, 255);
@@ -474,25 +478,36 @@ void main() {
           r255,
           greaterThan(190),
           reason:
-              'Stroke color red channel must be vibrant red (>190), got $r255',
+              'Fill stroke color red channel must be vibrant red (>190), got $r255',
         );
         expect(
           g255,
           lessThan(100),
-          reason: 'Stroke color green channel must be low (<100), got $g255',
+          reason:
+              'Fill stroke color green channel must be low (<100), got $g255',
         );
         expect(
           b255,
           lessThan(100),
-          reason: 'Stroke color blue channel must be low (<100), got $b255',
+          reason:
+              'Fill stroke color blue channel must be low (<100), got $b255',
         );
         // Red dominance over green proving it is Red, not Grey
         expect(
           r255 - g255,
           greaterThan(100),
           reason:
-              'Stroke must be vibrant Red (red - green > 100), not dull Grey',
+              'Fill stroke must be vibrant Red (red - green > 100), not dull Grey',
         );
+      }
+
+      // Assert sketch lines are dark contours with strokeWidth = 1.5
+      final lineStrokes = result.strokes.where(
+        (s) => s.actionType == AutodrawActionType.drawLine,
+      );
+      expect(lineStrokes, isNotEmpty);
+      for (final line in lineStrokes) {
+        expect(line.strokeWidth, equals(1.5));
       }
     });
 

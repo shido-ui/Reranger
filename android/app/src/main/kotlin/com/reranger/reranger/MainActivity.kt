@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
@@ -190,6 +191,12 @@ class MainActivity : FlutterActivity() {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                                 put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + File.separator + "Reranger")
                                 put(MediaStore.Video.Media.IS_PENDING, 1)
+                            } else {
+                                val moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+                                val rerangerDir = File(moviesDir, "Reranger")
+                                if (!rerangerDir.exists()) rerangerDir.mkdirs()
+                                val destFile = File(rerangerDir, "$title.mp4")
+                                put(MediaStore.Video.Media.DATA, destFile.absolutePath)
                             }
                         }
 
@@ -199,15 +206,18 @@ class MainActivity : FlutterActivity() {
                             return@setMethodCallHandler
                         }
 
+                        val pfd = resolver.openFileDescriptor(uri, "rw")
+                        if (pfd == null) {
+                            result.error("FD_FAILED", "Failed to open FileDescriptor for $uri", null)
+                            return@setMethodCallHandler
+                        }
+
                         FileInputStream(srcFile).use { input ->
-                            resolver.openOutputStream(uri).use { output ->
-                                if (output == null) {
-                                    result.error("STREAM_FAILED", "Failed to open MediaStore video output stream", null)
-                                    return@setMethodCallHandler
-                                }
+                            FileOutputStream(pfd.fileDescriptor).use { output ->
                                 input.copyTo(output)
                             }
                         }
+                        pfd.close()
 
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                             contentValues.clear()
@@ -218,6 +228,63 @@ class MainActivity : FlutterActivity() {
                         result.success(uri.toString())
                     } catch (e: Exception) {
                         result.error("SAVE_FAILED", "Failed saving video to gallery: ${e.message}", null)
+                    }
+                }
+                "encodeFramesToGallery" -> {
+                    val framePaths = call.argument<List<String>>("framePaths")
+                    val title = call.argument<String>("title") ?: "reranger_autodraw_${System.currentTimeMillis()}"
+                    val width = call.argument<Int>("width") ?: 720
+                    val height = call.argument<Int>("height") ?: 720
+                    val fps = call.argument<Int>("fps") ?: 30
+                    val bitRate = call.argument<Int>("bitRate") ?: 3_000_000
+
+                    if (framePaths.isNullOrEmpty()) {
+                        result.error("INVALID_ARGUMENT", "framePaths must not be empty", null)
+                        return@setMethodCallHandler
+                    }
+
+                    thread {
+                        var pfd: ParcelFileDescriptor? = null
+                        var uri: Uri? = null
+                        try {
+                            val resolver = applicationContext.contentResolver
+                            val contentValues = ContentValues().apply {
+                                put(MediaStore.Video.Media.DISPLAY_NAME, "$title.mp4")
+                                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + File.separator + "Reranger")
+                                    put(MediaStore.Video.Media.IS_PENDING, 1)
+                                } else {
+                                    val moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+                                    val rerangerDir = File(moviesDir, "Reranger")
+                                    if (!rerangerDir.exists()) rerangerDir.mkdirs()
+                                    val destFile = File(rerangerDir, "$title.mp4")
+                                    put(MediaStore.Video.Media.DATA, destFile.absolutePath)
+                                }
+                            }
+
+                            uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
+                                ?: throw IllegalStateException("Failed to create MediaStore entry for video")
+
+                            pfd = resolver.openFileDescriptor(uri, "rw")
+                                ?: throw IllegalStateException("Failed to open FileDescriptor for $uri")
+
+                            encodeFramesNative(framePaths, null, pfd.fileDescriptor, width, height, fps, bitRate)
+
+                            pfd.close()
+                            pfd = null
+
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                contentValues.clear()
+                                contentValues.put(MediaStore.Video.Media.IS_PENDING, 0)
+                                resolver.update(uri, contentValues, null, null)
+                            }
+
+                            runOnUiThread { result.success(uri.toString()) }
+                        } catch (e: Exception) {
+                            try { pfd?.close() } catch (_: Exception) {}
+                            runOnUiThread { result.error("ENCODE_FAILED", "MediaCodec gallery encoding failed: ${e.message}", null) }
+                        }
                     }
                 }
                 "encodeFramesToMp4" -> {
@@ -235,7 +302,7 @@ class MainActivity : FlutterActivity() {
 
                     thread {
                         try {
-                            encodeFramesNative(framePaths, outputPath, width, height, fps, bitRate)
+                            encodeFramesNative(framePaths, outputPath, null, width, height, fps, bitRate)
                             runOnUiThread { result.success(outputPath) }
                         } catch (e: Exception) {
                             runOnUiThread { result.error("ENCODE_FAILED", "MediaCodec encoding failed: ${e.message}", null) }
@@ -249,7 +316,8 @@ class MainActivity : FlutterActivity() {
 
     private fun encodeFramesNative(
         framePaths: List<String>,
-        outputPath: String,
+        outputPath: String?,
+        fileDescriptor: java.io.FileDescriptor?,
         width: Int,
         height: Int,
         fps: Int,
@@ -269,7 +337,11 @@ class MainActivity : FlutterActivity() {
         encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         encoder.start()
 
-        val muxer = MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        val muxer = if (fileDescriptor != null) {
+            MediaMuxer(fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        } else {
+            MediaMuxer(outputPath!!, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        }
         var trackIndex = -1
         var muxerStarted = false
         val bufferInfo = MediaCodec.BufferInfo()

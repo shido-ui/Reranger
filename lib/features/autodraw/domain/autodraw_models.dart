@@ -1,6 +1,18 @@
 import 'dart:math' as math;
 import 'dart:ui';
 
+/// Artist Pipeline Action Type.
+/// Strictly ordered: All Lines (0) -> All Fills (1) -> All Highlights (2).
+enum AutodrawActionType {
+  drawLine(0, 'Lines (Sketch)'),
+  fillRegion(1, 'Fills (Color)'),
+  drawHighlight(2, 'Highlights');
+
+  final int orderIndex;
+  final String label;
+  const AutodrawActionType(this.orderIndex, this.label);
+}
+
 /// Tonal hierarchy for progressive stroke rendering.
 /// Rendered strictly in order: Background -> Midtones -> Highlights.
 enum AutodrawTonalLayer {
@@ -64,32 +76,118 @@ class BezierSegment {
   }
 }
 
-/// A vectorized stroke consisting of a starting point and smooth Bézier curve segments.
-class AutodrawStroke {
+/// Data class representing a pre-computed artist command in the Autodraw pipeline.
+/// Encapsulates the path, color, strokeWidth, action type, and tonal layer.
+class AutodrawCommand {
   final int id;
+  final AutodrawActionType actionType;
   final AutodrawTonalLayer layer;
   final Color strokeColor;
   Color get color => strokeColor;
   final double strokeWidth;
+  double get width => strokeWidth;
   final Offset startPoint;
   final List<BezierSegment> segments;
+  final bool isClosed;
+  final List<Offset>? fillPoints;
 
   Path? _cachedPath;
   double? _cachedScaleX;
   double? _cachedScaleY;
   double? _cachedLength;
 
-  AutodrawStroke({
+  AutodrawCommand({
     required this.id,
-    required this.layer,
+    AutodrawActionType? actionType,
+    AutodrawTonalLayer? layer,
     Color? strokeColor,
     Color? color,
     required this.strokeWidth,
     required this.startPoint,
     required this.segments,
-  }) : strokeColor = strokeColor ?? color ?? const Color(0xFF000000);
+    this.isClosed = false,
+    this.fillPoints,
+  }) : actionType = actionType ??
+           (layer == AutodrawTonalLayer.background
+               ? AutodrawActionType.drawLine
+               : layer == AutodrawTonalLayer.midtones
+                   ? AutodrawActionType.fillRegion
+                   : AutodrawActionType.drawHighlight),
+       layer = layer ??
+           (actionType == AutodrawActionType.drawLine
+               ? AutodrawTonalLayer.background
+               : actionType == AutodrawActionType.fillRegion
+                   ? AutodrawTonalLayer.midtones
+                   : AutodrawTonalLayer.highlights),
+       strokeColor = strokeColor ?? color ?? const Color(0xFF1E1E24);
 
-  /// Constructs a Flutter [Path] representing this stroke, scaling every x and y coordinate by [scaleX] and [scaleY].
+  /// Pass 1: The Sketch (Lines) - Contours drawn with strokeWidth = 1.5 in dark ink.
+  factory AutodrawCommand.drawLine({
+    required int id,
+    required Offset startPoint,
+    required List<BezierSegment> segments,
+    double strokeWidth = 1.5,
+    Color color = const Color(0xFF1E1E24),
+    AutodrawTonalLayer layer = AutodrawTonalLayer.background,
+  }) {
+    return AutodrawCommand(
+      id: id,
+      actionType: AutodrawActionType.drawLine,
+      layer: layer,
+      strokeWidth: strokeWidth,
+      strokeColor: color,
+      startPoint: startPoint,
+      segments: segments,
+      isClosed: false,
+    );
+  }
+
+  /// Pass 2: The Color (Fills) - Sampled average color painted with broad brush.
+  factory AutodrawCommand.fillRegion({
+    required int id,
+    required Offset startPoint,
+    required List<BezierSegment> segments,
+    required Color color,
+    double strokeWidth = 8.0,
+    bool isClosed = true,
+    List<Offset>? fillPoints,
+    AutodrawTonalLayer layer = AutodrawTonalLayer.midtones,
+  }) {
+    return AutodrawCommand(
+      id: id,
+      actionType: AutodrawActionType.fillRegion,
+      layer: layer,
+      strokeWidth: strokeWidth,
+      strokeColor: color,
+      startPoint: startPoint,
+      segments: segments,
+      isClosed: isClosed,
+      fillPoints: fillPoints,
+    );
+  }
+
+  /// Pass 3: The Highlights - Bright spots (Luminance > 0.85).
+  factory AutodrawCommand.drawHighlight({
+    required int id,
+    required Offset startPoint,
+    required List<BezierSegment> segments,
+    double strokeWidth = 2.0,
+    Color color = const Color(0xFFFFFFFF),
+    AutodrawTonalLayer layer = AutodrawTonalLayer.highlights,
+  }) {
+    return AutodrawCommand(
+      id: id,
+      actionType: AutodrawActionType.drawHighlight,
+      layer: layer,
+      strokeWidth: strokeWidth,
+      strokeColor: color,
+      startPoint: startPoint,
+      segments: segments,
+      isClosed: false,
+    );
+  }
+
+  /// Constructs a Flutter [Path] representing this command, scaling coordinates by [scaleX] and [scaleY].
   Path toScaledPath(double scaleX, double scaleY) {
     if (_cachedPath != null &&
         _cachedScaleX == scaleX &&
@@ -107,13 +205,16 @@ class AutodrawStroke {
         seg.end.dy * scaleY,
       );
     }
+    if (isClosed) {
+      p.close();
+    }
     _cachedPath = p;
     _cachedScaleX = scaleX;
     _cachedScaleY = scaleY;
     return p;
   }
 
-  /// Constructs an unscaled Flutter [Path] representing this stroke in native bitmap coordinates.
+  /// Constructs an unscaled Flutter [Path] representing this command in native bitmap coordinates.
   Path get path => toScaledPath(1.0, 1.0);
 
   /// Estimated total arc length of the stroke.
@@ -130,34 +231,48 @@ class AutodrawStroke {
   }
 }
 
-/// The complete vectorization result containing strokes sorted by tonal layer.
+/// Backwards compatible alias for [AutodrawCommand].
+typedef AutodrawStroke = AutodrawCommand;
+
+/// The complete vectorization result containing pre-computed artist commands.
 class AutodrawVectorizationResult {
   final int width;
   final int height;
-  final List<AutodrawStroke> strokes;
+  final List<AutodrawCommand> commands;
+  List<AutodrawCommand> get strokes => commands;
 
-  const AutodrawVectorizationResult({
+  AutodrawVectorizationResult({
     required this.width,
     required this.height,
-    required this.strokes,
-  });
+    List<AutodrawCommand>? commands,
+    List<AutodrawCommand>? strokes,
+  }) : commands = commands ?? strokes ?? const [];
 
-  /// Verifies that strokes are strictly sorted Background -> Midtones -> Highlights.
+  /// Verifies that commands are strictly ordered: All Lines -> All Fills -> All Highlights.
   bool get isSortedByTonalLayer {
-    for (int i = 1; i < strokes.length; i++) {
-      if (strokes[i].layer.indexValue < strokes[i - 1].layer.indexValue) {
+    for (int i = 1; i < commands.length; i++) {
+      if (commands[i].actionType.orderIndex <
+          commands[i - 1].actionType.orderIndex) {
         return false;
       }
     }
     return true;
   }
 
+  int get linesCount =>
+      commands.where((c) => c.actionType == AutodrawActionType.drawLine).length;
+
+  int get fillsCount => commands
+      .where((c) => c.actionType == AutodrawActionType.fillRegion)
+      .length;
+
+  int get highlightsCount => commands
+      .where((c) => c.actionType == AutodrawActionType.drawHighlight)
+      .length;
+
   int get backgroundCount =>
-      strokes.where((s) => s.layer == AutodrawTonalLayer.background).length;
+      commands.where((s) => s.layer == AutodrawTonalLayer.background).length;
 
   int get midtonesCount =>
-      strokes.where((s) => s.layer == AutodrawTonalLayer.midtones).length;
-
-  int get highlightsCount =>
-      strokes.where((s) => s.layer == AutodrawTonalLayer.highlights).length;
+      commands.where((s) => s.layer == AutodrawTonalLayer.midtones).length;
 }
