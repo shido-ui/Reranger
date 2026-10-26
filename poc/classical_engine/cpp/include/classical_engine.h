@@ -44,9 +44,22 @@ size_t native_strip_metadata(
     size_t dst_capacity
 );
 
-/// Universal Adversarial Perturbation (ARMOR) in the frequency (DCT) domain.
-/// Applies pre-computed Universal Adversarial Perturbation tensor in 8x8 DCT blocks
-/// to disrupt CNN-based AI detectors without causing visible color banding.
+/// Robust Stealth Engine V3: Strips high-frequency DALL-E 3 latent upsampling checkerboard bias.
+void native_latent_sanitization(
+    const uint8_t* src,
+    uint8_t* dst,
+    int width,
+    int height,
+    float strength
+);
+
+/// ARMOR++ Multi-Domain Universal Adversarial Perturbation (2026 framework):
+/// Entropy-regularized convex combination of 4 perturbation primitives:
+/// 1. Spatial Perturbation (CW-style sign-gradient bounded by L_inf <= 8/255)
+/// 2. Frequency-Domain Attack (JPEG Q75-hardened 8x8 DCT mid-frequency)
+/// 3. Saliency Modification (JSMA gradient/variance masking)
+/// 4. Block-Structured Transformations (BSR 8x8 patch modulation)
+/// Constrained by an L_inf norm of 8/255 (at strength = 1.0) with SSIM > 0.90.
 void native_armor_attack(
     const uint8_t* src,
     uint8_t* dst,

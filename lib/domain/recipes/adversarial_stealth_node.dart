@@ -12,6 +12,8 @@ class ARMORAttackNode extends RenderGraphNode {
 
   final double strength; // Perturbation magnitude in [0.0, 1.0]
   final bool applyFrequencyPerturbation;
+  final bool multiDomain;
+  final bool latentSanitization;
 
   ARMORAttackNode({
     required super.id,
@@ -19,6 +21,8 @@ class ARMORAttackNode extends RenderGraphNode {
     required String inputNodeId,
     this.strength = 0.5,
     this.applyFrequencyPerturbation = true,
+    this.multiDomain = true,
+    this.latentSanitization = true,
     String? type,
   }) : super(
          type: type ?? nodeType,
@@ -26,6 +30,8 @@ class ARMORAttackNode extends RenderGraphNode {
          parameters: {
            'strength': strength,
            'applyFrequencyPerturbation': applyFrequencyPerturbation,
+           'multiDomain': multiDomain,
+           'latentSanitization': latentSanitization,
          },
        );
 
@@ -61,6 +67,8 @@ class ARMORAttackNode extends RenderGraphNode {
       strength: (params['strength'] as num?)?.toDouble() ?? 0.5,
       applyFrequencyPerturbation:
           params['applyFrequencyPerturbation'] as bool? ?? true,
+      multiDomain: params['multiDomain'] as bool? ?? true,
+      latentSanitization: params['latentSanitization'] as bool? ?? true,
     );
   }
 }

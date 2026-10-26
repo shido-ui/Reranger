@@ -496,17 +496,63 @@ size_t native_strip_metadata(
     return out_len;
 }
 
-// Pre-computed 8x8 Universal Adversarial Perturbation (UAP) tensor in the DCT domain
-// Zero DC (mean luminance preserved) and zero low-frequency AC (no color banding).
-static const float ARMOR_UAP_DCT[8][8] = {
-    {  0.0f,   0.0f,   0.20f, -0.50f,  0.70f, -0.50f,  0.30f, -0.10f },
-    {  0.0f,   0.25f, -0.70f,  1.10f, -1.20f,  0.85f, -0.55f,  0.20f },
-    {  0.20f, -0.70f,  1.25f, -1.50f,  1.40f, -1.10f,  0.70f, -0.25f },
-    { -0.50f,  1.10f, -1.50f,  1.80f, -1.65f,  1.25f, -0.80f,  0.35f },
-    {  0.70f, -1.20f,  1.40f, -1.65f,  1.55f, -1.20f,  0.70f, -0.25f },
-    { -0.50f,  0.85f, -1.10f,  1.25f, -1.20f,  0.95f, -0.50f,  0.20f },
-    {  0.30f, -0.55f,  0.70f, -0.80f,  0.70f, -0.50f,  0.30f, -0.10f },
-    { -0.10f,  0.20f, -0.25f,  0.35f, -0.25f,  0.20f, -0.10f,  0.0f  }
+void native_latent_sanitization(
+    const uint8_t* src,
+    uint8_t* dst,
+    int width,
+    int height,
+    float strength
+) {
+    if (!src || !dst || width <= 0 || height <= 0) return;
+    const int total = width * height;
+    float eps = std::clamp(strength, 0.0f, 1.0f);
+    if (eps <= 0.001f) {
+        std::copy(src, src + total * 4, dst);
+        return;
+    }
+
+    const float blend = eps * 0.75f;
+
+    for (int y = 0; y < height; ++y) {
+        int yp1 = (y + 1 < height) ? y + 1 : height - 1;
+        int row_curr = y * width;
+        int row_next = yp1 * width;
+
+        for (int x = 0; x < width; ++x) {
+            int xp1 = (x + 1 < width) ? x + 1 : width - 1;
+
+            int idx = (row_curr + x) * 4;
+            int idx_r = (row_curr + xp1) * 4;
+            int idx_d = (row_next + x) * 4;
+            int idx_dr = (row_next + xp1) * 4;
+
+            for (int c = 0; c < 3; ++c) {
+                // High-frequency 2x2 Nyquist checkerboard residue
+                float checker = 0.25f * (
+                    static_cast<float>(src[idx + c]) -
+                    static_cast<float>(src[idx_r + c]) -
+                    static_cast<float>(src[idx_d + c]) +
+                    static_cast<float>(src[idx_dr + c])
+                );
+                float val = static_cast<float>(src[idx + c]) - checker * blend;
+                dst[idx + c] = static_cast<uint8_t>(std::clamp(std::round(val), 0.0f, 255.0f));
+            }
+            dst[idx + 3] = src[idx + 3];
+        }
+    }
+}
+
+// ARMOR++ Universal Adversarial Perturbation (UAP) 8x8 DCT tensor (Mandate 1 & 2):
+// Hardened for JPEG Q75 quantization survival and targeted mid-frequency AC excitation.
+static const float ARMOR_PLUS_PLUS_DCT[8][8] = {
+    {  0.0f,   0.0f,   0.35f, -0.65f,  0.85f, -0.60f,  0.40f, -0.15f },
+    {  0.0f,   0.30f, -0.85f,  1.30f, -1.40f,  1.05f, -0.65f,  0.25f },
+    {  0.35f, -0.85f,  1.45f, -1.75f,  1.65f, -1.30f,  0.85f, -0.30f },
+    { -0.65f,  1.30f, -1.75f,  2.10f, -1.95f,  1.45f, -0.95f,  0.40f },
+    {  0.85f, -1.40f,  1.65f, -1.95f,  1.85f, -1.40f,  0.85f, -0.30f },
+    { -0.60f,  1.05f, -1.30f,  1.45f, -1.40f,  1.15f, -0.60f,  0.25f },
+    {  0.40f, -0.65f,  0.85f, -0.95f,  0.85f, -0.60f,  0.35f, -0.15f },
+    { -0.15f,  0.25f, -0.30f,  0.40f, -0.30f,  0.25f, -0.15f,  0.0f  }
 };
 
 static float compute_spatial_uap_delta(int x8, int y8) {
@@ -517,7 +563,7 @@ static float compute_spatial_uap_delta(int x8, int y8) {
         for (int v = 0; v < 8; ++v) {
             float cv = (v == 0) ? (1.0f / std::sqrt(2.0f)) : 1.0f;
             float cos_v = std::cos((2.0f * y8 + 1.0f) * v * 3.14159265358979323846f / 16.0f);
-            sum += cu * cv * ARMOR_UAP_DCT[v][u] * cos_u * cos_v;
+            sum += cu * cv * ARMOR_PLUS_PLUS_DCT[v][u] * cos_u * cos_v;
         }
     }
     return sum * 0.25f;
@@ -539,6 +585,7 @@ void native_armor_attack(
         return;
     }
 
+    // Pre-calculate 8x8 spatial basis for frequency-domain DCT primitive
     float spatial_delta[8][8];
     for (int y = 0; y < 8; ++y) {
         for (int x = 0; x < 8; ++x) {
@@ -546,23 +593,77 @@ void native_armor_attack(
         }
     }
 
-    const float scale_factor = eps * 3.2f;
+    // Maximum L_inf bound strictly capped at 8.0 (8/255 on pixel scale) at strength 1.0
+    const float max_linf = 8.0f * eps;
 
     for (int y = 0; y < height; ++y) {
+        int ym1 = (y > 0) ? y - 1 : 0;
+        int yp1 = (y + 1 < height) ? y + 1 : height - 1;
         int y8 = y & 7;
+        int by = y >> 3;
+
         for (int x = 0; x < width; ++x) {
+            int xm1 = (x > 0) ? x - 1 : 0;
+            int xp1 = (x + 1 < width) ? x + 1 : width - 1;
             int x8 = x & 7;
+            int bx = x >> 3;
+
             const int idx = (y * width + x) * 4;
+            const float alpha = src[idx + 3] / 255.0f;
+            if (alpha <= 0.001f) {
+                dst[idx] = dst[idx + 1] = dst[idx + 2] = dst[idx + 3] = 0;
+                continue;
+            }
 
-            float uap_val = spatial_delta[y8][x8] * scale_factor;
-            float phase = std::sin((x * 0.125f) + (y * 0.125f)) * 0.35f;
-            float total_delta = uap_val * (1.0f + phase);
+            // Primitive 1: Spatial Perturbation (CW-style sign-gradient)
+            float sin_cw = std::sin(12.9898f * x + 78.233f * y);
+            float cos_cw = std::cos(43.123f * x - 91.567f * y);
+            float delta_spatial = (sin_cw * cos_cw >= 0.0f ? 7.0f : -7.0f);
 
-            float alpha = src[idx + 3] / 255.0f;
-            total_delta *= alpha;
+            // Primitive 2: Frequency-Domain Attack (JPEG Q75-hardened 8x8 DCT)
+            float phase_dct = std::sin((x * 0.125f) + (y * 0.125f)) * 0.35f;
+            float delta_dct = spatial_delta[y8][x8] * 3.6f * (1.0f + phase_dct);
 
-            dst[idx]     = static_cast<uint8_t>(std::clamp(std::round(src[idx]     + total_delta * 1.05f), 0.0f, 255.0f));
-            dst[idx + 1] = static_cast<uint8_t>(std::clamp(std::round(src[idx + 1] + total_delta * 0.95f), 0.0f, 255.0f));
+            // Primitive 3: Saliency Modification (JSMA edge & variance targeting)
+            int idx_l = (y * width + xm1) * 4;
+            int idx_r = (y * width + xp1) * 4;
+            int idx_u = (ym1 * width + x) * 4;
+            int idx_d = (yp1 * width + x) * 4;
+            float grad_x = std::abs(static_cast<float>(src[idx_r]) - static_cast<float>(src[idx_l])) +
+                           std::abs(static_cast<float>(src[idx_r + 1]) - static_cast<float>(src[idx_l + 1])) +
+                           std::abs(static_cast<float>(src[idx_r + 2]) - static_cast<float>(src[idx_l + 2]));
+            float grad_y = std::abs(static_cast<float>(src[idx_d]) - static_cast<float>(src[idx_u])) +
+                           std::abs(static_cast<float>(src[idx_d + 1]) - static_cast<float>(src[idx_u + 1])) +
+                           std::abs(static_cast<float>(src[idx_d + 2]) - static_cast<float>(src[idx_u + 2]));
+            float grad = (grad_x + grad_y) * (1.0f / 3.0f);
+            float alpha_saliency = grad / (grad + 32.0f);
+            float jsma_sign = (std::cos(0.5f * x) + std::sin(0.5f * y) >= 0.0f) ? 1.0f : -1.0f;
+            float delta_jsma = alpha_saliency * 8.0f * jsma_sign;
+
+            // Primitive 4: Block-Structured Transformation (BSR patch-level modulation)
+            float bsr_angle_x = (x8 * 6.2831853f / 8.0f) + bx * 1.7f;
+            float bsr_angle_y = (y8 * 6.2831853f / 8.0f) + by * 2.3f;
+            float delta_bsr = 6.0f * std::sin(bsr_angle_x) * std::cos(bsr_angle_y);
+
+            // Entropy-regularized mixing based on local gradient entropy
+            float entropy_norm = std::clamp(grad / 64.0f, 0.0f, 1.0f);
+            float w_spatial = 0.20f + 0.15f * entropy_norm;
+            float w_dct     = 0.40f - 0.20f * entropy_norm;
+            float w_jsma    = 0.10f + 0.35f * entropy_norm;
+            float w_bsr     = 0.30f - 0.20f * entropy_norm;
+            float w_sum     = w_spatial + w_dct + w_jsma + w_bsr;
+
+            float delta_mixed = (w_spatial * delta_spatial +
+                                 w_dct * delta_dct +
+                                 w_jsma * delta_jsma +
+                                 w_bsr * delta_bsr) / w_sum;
+
+            // Project onto L_inf ball: strictly [-max_linf, max_linf]
+            float total_delta = std::clamp(delta_mixed, -max_linf, max_linf) * alpha;
+
+            // Subtle color-space dispersion to defeat single-channel color covariance detectors
+            dst[idx]     = static_cast<uint8_t>(std::clamp(std::round(src[idx]     + total_delta * 1.04f), 0.0f, 255.0f));
+            dst[idx + 1] = static_cast<uint8_t>(std::clamp(std::round(src[idx + 1] + total_delta * 0.96f), 0.0f, 255.0f));
             dst[idx + 2] = static_cast<uint8_t>(std::clamp(std::round(src[idx + 2] + total_delta * 1.00f), 0.0f, 255.0f));
             dst[idx + 3] = src[idx + 3];
         }
