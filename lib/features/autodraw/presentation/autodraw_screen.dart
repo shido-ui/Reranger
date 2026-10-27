@@ -25,6 +25,7 @@ class AutodrawScreen extends StatefulWidget {
   final Uint8List? processedImageBytes;
   final RenderGraph? renderGraph;
   final VideoTimelapseRecorder? recorderOverride;
+  final int? thermalStatusOverride;
 
   const AutodrawScreen({
     super.key,
@@ -33,6 +34,7 @@ class AutodrawScreen extends StatefulWidget {
     this.processedImageBytes,
     this.renderGraph,
     this.recorderOverride,
+    this.thermalStatusOverride,
   });
 
   @override
@@ -55,6 +57,10 @@ class _AutodrawScreenState extends State<AutodrawScreen>
   bool _isPlaying = true;
   bool _isEncoding = false;
 
+  bool _isThermalThrottled = false;
+  bool _isProgressiveComplete = false;
+  bool _isBufferingDetails = false;
+
   int _currentStrokeIndex = 0;
   double _currentStrokeProgress = 0.0;
   int _frameCounter = 0;
@@ -74,6 +80,15 @@ class _AutodrawScreenState extends State<AutodrawScreen>
   @visibleForTesting
   String? get errorMessage => _errorMessage;
 
+  @visibleForTesting
+  bool get isThermalThrottled => _isThermalThrottled;
+
+  @visibleForTesting
+  bool get isProgressiveComplete => _isProgressiveComplete;
+
+  @visibleForTesting
+  bool get isBufferingDetails => _isBufferingDetails;
+
   @override
   void initState() {
     super.initState();
@@ -91,24 +106,41 @@ class _AutodrawScreenState extends State<AutodrawScreen>
 
   Future<void> _initializeAutodraw() async {
     try {
+      // Mandate 3: Check Android thermal status before launching Isolate
+      int thermalStatus = widget.thermalStatusOverride ?? 0;
+      if (widget.thermalStatusOverride == null) {
+        try {
+          const channel = MethodChannel('com.reranger.app/media');
+          final status = await channel.invokeMethod<int>('getThermalStatus');
+          thermalStatus = status ?? 0;
+        } catch (_) {
+          thermalStatus = 0;
+        }
+      }
+
+      // Severe (3) or Critical (4) thermal status triggers governor throttle
+      final throttled = thermalStatus >= 3;
+      if (mounted && throttled) {
+        setState(() {
+          _isThermalThrottled = true;
+        });
+      }
+
       Uint8List? rawBytes = widget.processedImageBytes;
 
       if (rawBytes == null) {
-        // If renderGraph is supplied, run full shader pipeline to sample processed colors
+        // If renderGraph is supplied, run full shader pipeline with progressive streaming
         if (widget.renderGraph != null && widget.sourceImageBytes != null) {
           final pipeline = AutodrawPipeline();
-          final result = await pipeline.processAndVectorize(
+          final stream = pipeline.processAndVectorizeProgressive(
             sourceImageBytes: widget.sourceImageBytes!,
             renderGraph: widget.renderGraph!,
             maxPaths: 2500,
+            isThermalThrottled: throttled,
           );
-          if (mounted) {
-            setState(() {
-              _vectorResult = result;
-              _isLoading = false;
-            });
-            await _recorder.startRecording();
-            _ticker.start();
+          await for (final batch in stream) {
+            if (!mounted) break;
+            _handleProgressiveBatch(batch);
           }
           return;
         }
@@ -132,29 +164,18 @@ class _AutodrawScreenState extends State<AutodrawScreen>
         decoded.getBytes(order: img.ChannelOrder.rgba),
       );
 
-      // 1. Vectorize on background isolate
-      final result = await _vectorizer.vectorizeImage(
+      // Mandate 1: Progressive 2-phase streaming from background Isolate
+      final stream = _vectorizer.vectorizeProgressive(
         rgbaBytes: rgbaBytes,
         width: decoded.width,
         height: decoded.height,
         maxPaths: 2500,
+        isThermalThrottled: throttled,
       );
 
-      if (mounted) {
-        setState(() {
-          _vectorResult = result;
-          _isLoading = false;
-        });
-        await _recorder.startRecording();
-        _ticker.start();
-
-        // Capture initial frame after first composited paint
-        WidgetsBinding.instance.addPostFrameCallback((_) async {
-          if (mounted && _recorder.isRecording) {
-            await _recorder.captureFrame();
-            if (mounted) setState(() {});
-          }
-        });
+      await for (final batch in stream) {
+        if (!mounted) break;
+        _handleProgressiveBatch(batch);
       }
     } catch (e) {
       if (mounted) {
@@ -162,6 +183,51 @@ class _AutodrawScreenState extends State<AutodrawScreen>
           _errorMessage = e.toString();
           _isLoading = false;
         });
+      }
+    }
+  }
+
+  /// Handles incoming progressive batches from the background Isolate
+  void _handleProgressiveBatch(AutodrawProgressiveBatch batch) {
+    if (batch.phase == 1) {
+      // Phase 1 (Base Layer): Immediate playback start (< 1 second)
+      setState(() {
+        _vectorResult = AutodrawVectorizationResult(
+          width: batch.width,
+          height: batch.height,
+          commands: batch.commands,
+          flatStrokeBuffer: batch.flatStrokeBuffer,
+        );
+        _isLoading = false;
+        _isProgressiveComplete = batch.isComplete;
+      });
+      _recorder.startRecording().then((_) {
+        if (mounted && !_ticker.isActive) {
+          _ticker.start();
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            if (mounted && _recorder.isRecording) {
+              await _recorder.captureFrame();
+              if (mounted) setState(() {});
+            }
+          });
+        }
+      });
+    } else if (batch.phase == 2) {
+      // Phase 2 (Details): Buffer incoming detail strokes seamlessly
+      setState(() {
+        _vectorResult =
+            _vectorResult?.copyWithAppended(newCommands: batch.commands) ??
+            AutodrawVectorizationResult(
+              width: batch.width,
+              height: batch.height,
+              commands: batch.commands,
+              flatStrokeBuffer: batch.flatStrokeBuffer,
+            );
+        _isProgressiveComplete = true;
+        _isBufferingDetails = false;
+      });
+      if (_isPlaying && !_ticker.isActive) {
+        _ticker.start();
       }
     }
   }
@@ -182,9 +248,19 @@ class _AutodrawScreenState extends State<AutodrawScreen>
     while (pathsAdvancedInFrame < allowedMaxPaths &&
         stopwatch.elapsedMilliseconds < 14) {
       if (_currentStrokeIndex >= strokes.length) {
-        _isPlaying = false;
-        _ticker.stop();
-        break;
+        if (!_isProgressiveComplete) {
+          // Reached end of currently buffered strokes, wait for Phase 2 details
+          if (!_isBufferingDetails) {
+            setState(() {
+              _isBufferingDetails = true;
+            });
+          }
+          return;
+        } else {
+          _isPlaying = false;
+          _ticker.stop();
+          break;
+        }
       }
 
       // Advance progress along the active Bézier stroke
@@ -292,6 +368,7 @@ class _AutodrawScreenState extends State<AutodrawScreen>
       _currentStrokeIndex = 0;
       _currentStrokeProgress = 0.0;
       _isPlaying = true;
+      _isBufferingDetails = false;
     });
     await _recorder.startRecording();
     _ticker.start();
@@ -387,6 +464,88 @@ class _AutodrawScreenState extends State<AutodrawScreen>
               )
             : Column(
                 children: [
+                  // Mandate 3: Thermal Governor Warning Banner
+                  if (_isThermalThrottled)
+                    Container(
+                      key: const Key('autodraw_thermal_warning'),
+                      margin: const EdgeInsets.symmetric(
+                        horizontal: AppSpacingTokens.md,
+                        vertical: AppSpacingTokens.xs,
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacingTokens.sm,
+                        vertical: AppSpacingTokens.xs,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade900.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.amber.shade700,
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.warning_amber_rounded,
+                            size: 16,
+                            color: Colors.amber.shade400,
+                          ),
+                          const SizedBox(width: AppSpacingTokens.xs),
+                          Expanded(
+                            child: Text(
+                              'Device is hot. Reducing detail to protect battery.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.amber.shade300,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  // Mandate 1: Subtle Progressive Buffering Indicator
+                  if (_isBufferingDetails && !_isProgressiveComplete)
+                    Container(
+                      key: const Key('autodraw_preparing_details_banner'),
+                      margin: const EdgeInsets.symmetric(
+                        horizontal: AppSpacingTokens.md,
+                        vertical: AppSpacingTokens.xs,
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacingTokens.sm,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: accentColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation(accentColor),
+                            ),
+                          ),
+                          const SizedBox(width: AppSpacingTokens.xs),
+                          Text(
+                            'Preparing details...',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: accentColor,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
                   // Drawing Canvas Viewport wrapped in RepaintBoundary for 60FPS stream-to-disk
                   Expanded(
                     child: Center(

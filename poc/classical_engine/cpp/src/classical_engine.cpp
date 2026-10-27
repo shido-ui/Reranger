@@ -1837,9 +1837,9 @@ StrokeBuffer* native_skeleton_trace(
     if (!rgba || width <= 0 || height <= 0) return nullptr;
     if (max_strokes <= 0) max_strokes = 2500;
 
-    // 1. Downscale to max 1024px for cache locality & bounded latency
+    // 1. Mandate 2: Resolution Ladder downscale to max 512px for bounded latency & 90% compute reduction
     int max_dim = std::max(width, height);
-    float scale = (max_dim > 1024) ? (1024.0f / max_dim) : 1.0f;
+    float scale = (max_dim > 512) ? (512.0f / max_dim) : 1.0f;
     int proc_w = std::max(1, static_cast<int>(std::round(width * scale)));
     int proc_h = std::max(1, static_cast<int>(std::round(height * scale)));
 

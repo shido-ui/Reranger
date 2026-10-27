@@ -75,6 +75,19 @@ class MainActivity : FlutterActivity() {
         // 3. Media Save & Share Channel (DEF-025)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MEDIA_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
+                "getThermalStatus" -> {
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            val powerManager = getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+                            val status = powerManager?.currentThermalStatus ?: 0
+                            result.success(status)
+                        } else {
+                            result.success(0)
+                        }
+                    } catch (e: Exception) {
+                        result.success(0)
+                    }
+                }
                 "saveImageToGallery" -> {
                     val filePath = call.argument<String>("filePath")
                     val title = call.argument<String>("title") ?: "reranger_export_${System.currentTimeMillis()}"

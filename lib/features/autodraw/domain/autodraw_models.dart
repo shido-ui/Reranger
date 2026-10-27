@@ -235,14 +235,16 @@ class AutodrawCommand {
 }
 
 /// Zero-copy flat stroke buffer storing centerline skeleton and medial axis widths:
-/// - [pointsXY]: Interleaved coordinates (x0, y0, x1, y1, ...) as int16.
-/// - [widths]: Local medial axis stroke width per point (1 to 25px).
+/// - [pointsXY]: Interleaved coordinates (x0, y0, x1, y1, ...) as int16 (Mandate 4).
+/// - [widths]: Local medial axis stroke width per point (1 to 25px) as uint8 (Mandate 4).
+/// - [colors]: Packed RGBA channels per stroke (4 bytes per stroke) as uint8 (Mandate 4).
 /// - [offsets]: Prefix offsets marking the start point index of each stroke. Length = strokeCount + 1.
 /// - [strokeLengths]: Pre-computed total arc length per stroke.
 /// - [cumulativeDistances]: Cumulative arc lengths along each stroke for O(log n) binary search.
 class FlatStrokeBuffer {
   final Int16List pointsXY;
   final Uint8List widths;
+  final Uint8List colors;
   final Uint32List offsets;
   final int strokeCount;
   final int totalPoints;
@@ -252,12 +254,14 @@ class FlatStrokeBuffer {
   FlatStrokeBuffer({
     required this.pointsXY,
     required this.widths,
+    Uint8List? colors,
     required this.offsets,
     required this.strokeCount,
     required this.totalPoints,
     Float32List? strokeLengths,
     List<Float32List>? cumulativeDistances,
-  }) : strokeLengths =
+  }) : colors = colors ?? Uint8List(strokeCount * 4),
+       strokeLengths =
            strokeLengths ??
            _computeStrokeLengths(pointsXY, offsets, strokeCount),
        cumulativeDistances =
@@ -435,10 +439,17 @@ class FlatStrokeBuffer {
     final pointsXY = Int16List(totalPts * 2);
     final widths = Uint8List(totalPts);
     final offsets = Uint32List(strokeCount + 1);
+    final colors = Uint8List(strokeCount * 4);
 
     int curIdx = 0;
     for (int s = 0; s < strokeCount; s++) {
       offsets[s] = curIdx;
+      final c = commands[s].strokeColor;
+      colors[s * 4] = (c.r * 255).round().clamp(0, 255);
+      colors[s * 4 + 1] = (c.g * 255).round().clamp(0, 255);
+      colors[s * 4 + 2] = (c.b * 255).round().clamp(0, 255);
+      colors[s * 4 + 3] = (c.a * 255).round().clamp(0, 255);
+
       final pts = strokePointsList[s];
       final ws = strokeWidthsList[s];
       for (int i = 0; i < pts.length; i++) {
@@ -453,15 +464,52 @@ class FlatStrokeBuffer {
     return FlatStrokeBuffer(
       pointsXY: pointsXY,
       widths: widths,
+      colors: colors,
       offsets: offsets,
       strokeCount: strokeCount,
       totalPoints: totalPts,
     );
   }
+
+  /// Extracts the packed RGBA Color for the given [strokeIndex].
+  Color getStrokeColor(int strokeIndex) {
+    if (colors.length >= (strokeIndex + 1) * 4) {
+      return Color.fromARGB(
+        colors[strokeIndex * 4 + 3],
+        colors[strokeIndex * 4],
+        colors[strokeIndex * 4 + 1],
+        colors[strokeIndex * 4 + 2],
+      );
+    }
+    return const Color(0xFF1E1E24);
+  }
 }
 
 /// Backwards compatible alias for [AutodrawCommand].
 typedef AutodrawStroke = AutodrawCommand;
+
+/// Progressive streaming batch yielded by the background Isolate during Autodraw V4 execution:
+/// - Phase 1 (Base Layer): Background and base color fills (~first 20% of strokes).
+/// - Phase 2 (Details): Detailed skeleton linework and highlights.
+class AutodrawProgressiveBatch {
+  final int phase;
+  final bool isComplete;
+  final List<AutodrawCommand> commands;
+  final FlatStrokeBuffer flatStrokeBuffer;
+  final int width;
+  final int height;
+  final bool isThermalThrottled;
+
+  const AutodrawProgressiveBatch({
+    required this.phase,
+    required this.isComplete,
+    required this.commands,
+    required this.flatStrokeBuffer,
+    required this.width,
+    required this.height,
+    this.isThermalThrottled = false,
+  });
+}
 
 /// The complete vectorization result containing pre-computed artist commands.
 class AutodrawVectorizationResult {
@@ -510,4 +558,21 @@ class AutodrawVectorizationResult {
 
   int get midtonesCount =>
       commands.where((s) => s.layer == AutodrawTonalLayer.midtones).length;
+
+  /// Returns a new [AutodrawVectorizationResult] appending new commands and re-generating flat buffer.
+  AutodrawVectorizationResult copyWithAppended({
+    required List<AutodrawCommand> newCommands,
+  }) {
+    final mergedCommands = [...commands, ...newCommands];
+    return AutodrawVectorizationResult(
+      width: width,
+      height: height,
+      commands: mergedCommands,
+      flatStrokeBuffer: FlatStrokeBuffer.fromCommands(
+        mergedCommands,
+        width,
+        height,
+      ),
+    );
+  }
 }

@@ -23,6 +23,7 @@ class AutodrawPipeline {
     required Uint8List sourceImageBytes,
     required RenderGraph renderGraph,
     int maxPaths = 2500,
+    bool isThermalThrottled = false,
   }) async {
     // 1. Render Graph execution (CIELAB, Vibrancy, Presets)
     final renderResult = await executor.execute(
@@ -36,6 +37,28 @@ class AutodrawPipeline {
       width: renderResult.width,
       height: renderResult.height,
       maxPaths: maxPaths,
+      isThermalThrottled: isThermalThrottled,
+    );
+  }
+
+  /// Progressively executes shader processing and streams Phase 1 (Base Layer) and Phase 2 (Details).
+  Stream<AutodrawProgressiveBatch> processAndVectorizeProgressive({
+    required Uint8List sourceImageBytes,
+    required RenderGraph renderGraph,
+    int maxPaths = 2500,
+    bool isThermalThrottled = false,
+  }) async* {
+    final renderResult = await executor.execute(
+      graph: renderGraph,
+      sourceImageBytes: sourceImageBytes,
+    );
+
+    yield* vectorizer.vectorizeProgressive(
+      rgbaBytes: renderResult.pixelBytes,
+      width: renderResult.width,
+      height: renderResult.height,
+      maxPaths: maxPaths,
+      isThermalThrottled: isThermalThrottled,
     );
   }
 }

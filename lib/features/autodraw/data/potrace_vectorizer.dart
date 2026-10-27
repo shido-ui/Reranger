@@ -50,57 +50,391 @@ class _VectorizeTaskParams {
   final int width;
   final int height;
   final int maxPaths;
+  final bool isThermalThrottled;
+  final SendPort? sendPort;
 
   const _VectorizeTaskParams({
     required this.rgbaBytes,
     required this.width,
     required this.height,
     required this.maxPaths,
+    this.isThermalThrottled = false,
+    this.sendPort,
   });
 }
 
-/// Autodraw Engine V3 (Centerline Skeletonization, Guo-Hall Thinning, Pre-Computed Pipeline):
-/// - Step A (Loading): Displays "Preparing artist sequence..." spinner while Isolate executes.
-/// - Step B (Pre-computation): Runs Guo-Hall thinning & Medial Axis distance transform in background Isolate.
-/// - Step C (Playback): Returns zero-copy FlatStrokeBuffer with strictly ordered passes:
-///   Pass 1: The Sketch (Centerline Lines) - 1-pixel skeleton (strokeWidth = 1.0 - 2.5, dark ink).
-///   Pass 2: The Color (Fills) - Broad painterly color strokes (strokeWidth = 6.0 - 15.0).
-///   Pass 3: The Highlights - Bright spots (Luminance > 0.85).
+/// Autodraw Engine V4 (Progressive Playback, Resolution Ladder & Thermal Governor):
+/// - Mandate 1 (Progressive Playback): Splits vectorization into Phase 1 (Base Layer fills ~20%)
+///   and Phase 2 (Fine line details and highlights), yielding immediate zero-latency start.
+/// - Mandate 2 (Resolution Ladder): Downscales images to max 512x512 for skeletonization & RDP,
+///   then scales int16 coordinates up to final screen resolution via bilinear scale factors.
+/// - Mandate 3 (Thermal Governor): Increases RDP epsilon to 2.0px under thermal throttle to drop
+///   stroke count and protect hardware.
+/// - Mandate 4 (Memory Optimization): FlatStrokeBuffer strictly uses Int16List coordinates & Uint8List colors.
 class PotraceVectorizer {
   const PotraceVectorizer();
 
   /// Executes the Pre-Computed Artist Pipeline on a background isolate via [Isolate.run].
+  /// Backwards compatible method returning the complete vectorization result.
   Future<AutodrawVectorizationResult> vectorizeImage({
     required Uint8List rgbaBytes,
     required int width,
     required int height,
     int maxPaths = 2500,
+    bool isThermalThrottled = false,
   }) async {
     final params = _VectorizeTaskParams(
       rgbaBytes: rgbaBytes,
       width: width,
       height: height,
       maxPaths: maxPaths,
+      isThermalThrottled: isThermalThrottled,
     );
 
-    // Guaranteed execution on a background isolate
     return await Isolate.run(() => _vectorizeWorker(params));
   }
 
-  /// Worker function executing on the background isolate.
+  /// Streams progressive batches from a background isolate via [Isolate.spawn]:
+  /// - Phase 1 (Base Layer): Background and base color fills (~first 20% of strokes) yielded immediately.
+  /// - Phase 2 (Details): Detailed skeleton linework and highlights yielded as they complete.
+  Stream<AutodrawProgressiveBatch> vectorizeProgressive({
+    required Uint8List rgbaBytes,
+    required int width,
+    required int height,
+    int maxPaths = 2500,
+    bool isThermalThrottled = false,
+  }) async* {
+    final receivePort = ReceivePort();
+    final params = _VectorizeTaskParams(
+      rgbaBytes: rgbaBytes,
+      width: width,
+      height: height,
+      maxPaths: maxPaths,
+      isThermalThrottled: isThermalThrottled,
+      sendPort: receivePort.sendPort,
+    );
+
+    final isolate = await Isolate.spawn(_progressiveVectorizeWorker, params);
+
+    try {
+      await for (final msg in receivePort) {
+        if (msg is AutodrawProgressiveBatch) {
+          yield msg;
+          if (msg.isComplete) {
+            break;
+          }
+        } else if (msg == null) {
+          break;
+        }
+      }
+    } finally {
+      receivePort.close();
+      isolate.kill(priority: Isolate.immediate);
+    }
+  }
+
+  // ==========================================================================
+  // Mandate 2: Resolution Ladder Downscaling & Bilinear Scaling
+  // ==========================================================================
+
+  static ({Uint8List rgba, int width, int height, double scaleX, double scaleY})
+  _applyResolutionLadder(Uint8List rgba, int width, int height) {
+    if (width <= 512 && height <= 512) {
+      return (
+        rgba: rgba,
+        width: width,
+        height: height,
+        scaleX: 1.0,
+        scaleY: 1.0,
+      );
+    }
+
+    int ladderW;
+    int ladderH;
+    if (width >= height) {
+      ladderW = 512;
+      ladderH = math.max(1, ((512 * height) / width).round());
+    } else {
+      ladderH = 512;
+      ladderW = math.max(1, ((512 * width) / height).round());
+    }
+
+    final downscaled = _downscaleRgba(rgba, width, height, ladderW, ladderH);
+    final scaleX = width / ladderW;
+    final scaleY = height / ladderH;
+
+    return (
+      rgba: downscaled,
+      width: ladderW,
+      height: ladderH,
+      scaleX: scaleX,
+      scaleY: scaleY,
+    );
+  }
+
+  static Uint8List _downscaleRgba(
+    Uint8List srcRgba,
+    int srcW,
+    int srcH,
+    int dstW,
+    int dstH,
+  ) {
+    if (srcW == dstW && srcH == dstH) return srcRgba;
+    final dst = Uint8List(dstW * dstH * 4);
+    final stepX = srcW / dstW;
+    final stepY = srcH / dstH;
+
+    for (int y = 0; y < dstH; y++) {
+      final sy = (y * stepY).floor().clamp(0, srcH - 1);
+      final rowDst = y * dstW * 4;
+      final rowSrc = sy * srcW * 4;
+      for (int x = 0; x < dstW; x++) {
+        final sx = (x * stepX).floor().clamp(0, srcW - 1);
+        final dIdx = rowDst + x * 4;
+        final sIdx = rowSrc + sx * 4;
+        dst[dIdx] = srcRgba[sIdx];
+        dst[dIdx + 1] = srcRgba[sIdx + 1];
+        dst[dIdx + 2] = srcRgba[sIdx + 2];
+        dst[dIdx + 3] = srcRgba[sIdx + 3];
+      }
+    }
+    return dst;
+  }
+
+  // ==========================================================================
+  // Mandate 1: Progressive Vectorize Worker
+  // ==========================================================================
+
+  static void _progressiveVectorizeWorker(_VectorizeTaskParams params) {
+    final sendPort = params.sendPort;
+    final targetW = params.width;
+    final targetH = params.height;
+
+    if (targetW <= 0 ||
+        targetH <= 0 ||
+        params.rgbaBytes.length < targetW * targetH * 4) {
+      sendPort?.send(
+        AutodrawProgressiveBatch(
+          phase: 1,
+          isComplete: true,
+          commands: const [],
+          flatStrokeBuffer: FlatStrokeBuffer(
+            pointsXY: Int16List(0),
+            widths: Uint8List(0),
+            offsets: Uint32List.fromList([0]),
+            strokeCount: 0,
+            totalPoints: 0,
+          ),
+          width: targetW,
+          height: targetH,
+        ),
+      );
+      return;
+    }
+
+    // 1. Mandate 2: Resolution ladder downscaling (512x512 cap)
+    final ladder = _applyResolutionLadder(params.rgbaBytes, targetW, targetH);
+    final procW = ladder.width;
+    final procH = ladder.height;
+    final procRgba = ladder.rgba;
+    final scaleX = ladder.scaleX;
+    final scaleY = ladder.scaleY;
+    final total = procW * procH;
+
+    // Luminance computation
+    final lum = Uint8List(total);
+    for (int i = 0; i < total; i++) {
+      final off = i * 4;
+      lum[i] =
+          (0.299 * procRgba[off] +
+                  0.587 * procRgba[off + 1] +
+                  0.114 * procRgba[off + 2])
+              .round()
+              .clamp(0, 255);
+    }
+
+    int nextCommandId = 1;
+
+    // -----------------------------------------------------------------------
+    // PHASE 1: Base Layer (Background & Base Color Fills)
+    // Extract ONLY the background and base color fills (~20% of strokes)
+    // Yield immediately for zero-latency start!
+    // -----------------------------------------------------------------------
+    final fillCommands = _extractFillCommands(
+      procRgba,
+      lum,
+      procW,
+      procH,
+      params.maxPaths,
+      scaleX,
+      scaleY,
+      nextCommandId,
+    );
+    nextCommandId += fillCommands.length;
+
+    // Fallback fill if empty
+    if (fillCommands.isEmpty && targetW > 0 && targetH > 0) {
+      final midX = targetW ~/ 2;
+      final midY = targetH ~/ 2;
+      final off = (midY * targetW + midX) * 4;
+      final c = (off + 2 < params.rgbaBytes.length)
+          ? Color.fromARGB(
+              255,
+              params.rgbaBytes[off],
+              params.rgbaBytes[off + 1],
+              params.rgbaBytes[off + 2],
+            )
+          : const Color(0xFF808080);
+      fillCommands.add(
+        AutodrawCommand.fillRegion(
+          id: nextCommandId++,
+          startPoint: Offset(targetW * 0.2, targetH * 0.5),
+          segments: [
+            BezierSegment(
+              cp1: Offset(targetW * 0.4, targetH * 0.48),
+              cp2: Offset(targetW * 0.6, targetH * 0.52),
+              end: Offset(targetW * 0.8, targetH * 0.5),
+            ),
+          ],
+          color: c,
+          strokeWidth: 10.0,
+          isClosed: false,
+          layer: AutodrawTonalLayer.midtones,
+        ),
+      );
+    }
+
+    final phase1Buffer = FlatStrokeBuffer.fromCommands(
+      fillCommands,
+      targetW,
+      targetH,
+    );
+
+    // Yield Phase 1 immediately
+    sendPort?.send(
+      AutodrawProgressiveBatch(
+        phase: 1,
+        isComplete: false,
+        commands: List.unmodifiable(fillCommands),
+        flatStrokeBuffer: phase1Buffer,
+        width: targetW,
+        height: targetH,
+        isThermalThrottled: params.isThermalThrottled,
+      ),
+    );
+
+    // -----------------------------------------------------------------------
+    // PHASE 2: Fine Line Details & Highlights
+    // While UI plays Phase 1, background Isolate continues calculating details
+    // -----------------------------------------------------------------------
+    // Mandate 3: Thermal Governor epsilon adjustment (2.0px if throttled)
+    final double rdpEpsilon = params.isThermalThrottled ? 2.0 : 0.3;
+
+    final lineCommands = _extractLineCommands(
+      procRgba,
+      lum,
+      procW,
+      procH,
+      params.maxPaths,
+      scaleX,
+      scaleY,
+      rdpEpsilon,
+      nextCommandId,
+    );
+    nextCommandId += lineCommands.length;
+
+    // Fallback line if empty
+    if (lineCommands.isEmpty && targetW > 0 && targetH > 0) {
+      final fw = targetW.toDouble();
+      final fh = targetH.toDouble();
+      lineCommands.add(
+        AutodrawCommand.drawLine(
+          id: nextCommandId++,
+          startPoint: Offset.zero,
+          segments: [
+            BezierSegment(
+              cp1: Offset(fw * 0.33, 0),
+              cp2: Offset(fw * 0.66, 0),
+              end: Offset(fw, 0),
+            ),
+            BezierSegment(
+              cp1: Offset(fw, fh * 0.33),
+              cp2: Offset(fw, fh * 0.66),
+              end: Offset(fw, fh),
+            ),
+            BezierSegment(
+              cp1: Offset(fw * 0.66, fh),
+              cp2: Offset(fw * 0.33, fh),
+              end: Offset(0, fh),
+            ),
+            BezierSegment(
+              cp1: Offset(0, fh * 0.66),
+              cp2: Offset(0, fh * 0.33),
+              end: Offset.zero,
+            ),
+          ],
+          strokeWidth: 1.5,
+          color: const Color(0xFF1E1E24),
+          layer: AutodrawTonalLayer.background,
+        ),
+      );
+    }
+
+    final highlightCommands = _extractHighlightCommands(
+      procRgba,
+      lum,
+      procW,
+      procH,
+      params.maxPaths,
+      scaleX,
+      scaleY,
+      nextCommandId,
+    );
+    nextCommandId += highlightCommands.length;
+
+    final phase2Details = <AutodrawCommand>[
+      ...lineCommands,
+      ...highlightCommands,
+    ];
+
+    final allCommands = <AutodrawCommand>[...fillCommands, ...phase2Details];
+
+    final completeBuffer = FlatStrokeBuffer.fromCommands(
+      allCommands,
+      targetW,
+      targetH,
+    );
+
+    sendPort?.send(
+      AutodrawProgressiveBatch(
+        phase: 2,
+        isComplete: true,
+        commands: List.unmodifiable(phase2Details),
+        flatStrokeBuffer: completeBuffer,
+        width: targetW,
+        height: targetH,
+        isThermalThrottled: params.isThermalThrottled,
+      ),
+    );
+  }
+
+  // ==========================================================================
+  // Synchronous Isolate Worker for vectorizeImage
+  // ==========================================================================
+
   static AutodrawVectorizationResult _vectorizeWorker(
     _VectorizeTaskParams params,
   ) {
-    final width = params.width;
-    final height = params.height;
-    final total = width * height;
-    final rgba = params.rgbaBytes;
+    final targetW = params.width;
+    final targetH = params.height;
 
-    if (total == 0 || rgba.length < total * 4) {
+    if (targetW <= 0 ||
+        targetH <= 0 ||
+        params.rgbaBytes.length < targetW * targetH * 4) {
       return AutodrawVectorizationResult(
-        width: width,
-        height: height,
-        commands: [],
+        width: targetW,
+        height: targetH,
+        commands: const [],
       );
     }
 
@@ -110,29 +444,206 @@ class PotraceVectorizer {
       return nativeResult;
     }
 
-    // 0. Luminance computation for edge and highlight extraction
+    // 1. Mandate 2: Resolution ladder downscaling
+    final ladder = _applyResolutionLadder(params.rgbaBytes, targetW, targetH);
+    final procW = ladder.width;
+    final procH = ladder.height;
+    final procRgba = ladder.rgba;
+    final scaleX = ladder.scaleX;
+    final scaleY = ladder.scaleY;
+    final total = procW * procH;
+
+    // Luminance
     final lum = Uint8List(total);
     for (int i = 0; i < total; i++) {
       final off = i * 4;
       lum[i] =
-          (0.299 * rgba[off] + 0.587 * rgba[off + 1] + 0.114 * rgba[off + 2])
+          (0.299 * procRgba[off] +
+                  0.587 * procRgba[off + 1] +
+                  0.114 * procRgba[off + 2])
               .round()
               .clamp(0, 255);
     }
 
     int nextCommandId = 1;
 
-    // -------------------------------------------------------------------------
-    // PASS 1: The Sketch (Centerline Lines via Guo-Hall Thinning & Medial Axis)
-    // -------------------------------------------------------------------------
+    // Mandate 3: Thermal Governor epsilon adjustment
+    final double rdpEpsilon = params.isThermalThrottled ? 2.0 : 0.3;
+
+    // Extract all passes
+    final lineCommands = _extractLineCommands(
+      procRgba,
+      lum,
+      procW,
+      procH,
+      params.maxPaths,
+      scaleX,
+      scaleY,
+      rdpEpsilon,
+      nextCommandId,
+    );
+    nextCommandId += lineCommands.length;
+
+    final fillCommands = _extractFillCommands(
+      procRgba,
+      lum,
+      procW,
+      procH,
+      params.maxPaths,
+      scaleX,
+      scaleY,
+      nextCommandId,
+    );
+    nextCommandId += fillCommands.length;
+
+    final highlightCommands = _extractHighlightCommands(
+      procRgba,
+      lum,
+      procW,
+      procH,
+      params.maxPaths,
+      scaleX,
+      scaleY,
+      nextCommandId,
+    );
+    nextCommandId += highlightCommands.length;
+
+    // Fallbacks
+    if (lineCommands.isEmpty && targetW > 0 && targetH > 0) {
+      final fw = targetW.toDouble();
+      final fh = targetH.toDouble();
+      lineCommands.add(
+        AutodrawCommand.drawLine(
+          id: nextCommandId++,
+          startPoint: Offset.zero,
+          segments: [
+            BezierSegment(
+              cp1: Offset(fw * 0.33, 0),
+              cp2: Offset(fw * 0.66, 0),
+              end: Offset(fw, 0),
+            ),
+            BezierSegment(
+              cp1: Offset(fw, fh * 0.33),
+              cp2: Offset(fw, fh * 0.66),
+              end: Offset(fw, fh),
+            ),
+            BezierSegment(
+              cp1: Offset(fw * 0.66, fh),
+              cp2: Offset(fw * 0.33, fh),
+              end: Offset(0, fh),
+            ),
+            BezierSegment(
+              cp1: Offset(0, fh * 0.66),
+              cp2: Offset(0, fh * 0.33),
+              end: Offset.zero,
+            ),
+          ],
+          strokeWidth: 1.5,
+          color: const Color(0xFF1E1E24),
+          layer: AutodrawTonalLayer.background,
+        ),
+      );
+    }
+
+    if (fillCommands.isEmpty && targetW > 0 && targetH > 0) {
+      final midX = targetW ~/ 2;
+      final midY = targetH ~/ 2;
+      final off = (midY * targetW + midX) * 4;
+      final c = (off + 2 < params.rgbaBytes.length)
+          ? Color.fromARGB(
+              255,
+              params.rgbaBytes[off],
+              params.rgbaBytes[off + 1],
+              params.rgbaBytes[off + 2],
+            )
+          : const Color(0xFF808080);
+      fillCommands.add(
+        AutodrawCommand.fillRegion(
+          id: nextCommandId++,
+          startPoint: Offset(targetW * 0.2, targetH * 0.5),
+          segments: [
+            BezierSegment(
+              cp1: Offset(targetW * 0.4, targetH * 0.48),
+              cp2: Offset(targetW * 0.6, targetH * 0.52),
+              end: Offset(targetW * 0.8, targetH * 0.5),
+            ),
+          ],
+          color: c,
+          strokeWidth: 10.0,
+          isClosed: false,
+          layer: AutodrawTonalLayer.midtones,
+        ),
+      );
+    }
+
+    if (highlightCommands.isEmpty && targetW > 0 && targetH > 0) {
+      highlightCommands.add(
+        AutodrawCommand.drawHighlight(
+          id: nextCommandId++,
+          startPoint: Offset(targetW * 0.45, targetH * 0.45),
+          segments: [
+            BezierSegment(
+              cp1: Offset(targetW * 0.48, targetH * 0.45),
+              cp2: Offset(targetW * 0.52, targetH * 0.45),
+              end: Offset(targetW * 0.55, targetH * 0.45),
+            ),
+          ],
+          strokeWidth: 2.0,
+          color: const Color(0xFFFFFFFF),
+          layer: AutodrawTonalLayer.highlights,
+        ),
+      );
+    }
+
+    // Strictly ordered: Lines -> Fills -> Highlights
+    final allCommands = <AutodrawCommand>[
+      ...lineCommands,
+      ...fillCommands,
+      ...highlightCommands,
+    ];
+
+    allCommands.sort(
+      (a, b) => a.actionType.orderIndex.compareTo(b.actionType.orderIndex),
+    );
+
+    final flatBuffer = FlatStrokeBuffer.fromCommands(
+      allCommands,
+      targetW,
+      targetH,
+    );
+
+    return AutodrawVectorizationResult(
+      width: targetW,
+      height: targetH,
+      commands: allCommands,
+      flatStrokeBuffer: flatBuffer,
+    );
+  }
+
+  // ==========================================================================
+  // Modular Pass Extractors
+  // ==========================================================================
+
+  /// Pass 1: The Sketch (Centerline Lines via Guo-Hall Thinning & Medial Axis)
+  static List<AutodrawCommand> _extractLineCommands(
+    Uint8List rgba,
+    Uint8List lum,
+    int width,
+    int height,
+    int maxPaths,
+    double scaleX,
+    double scaleY,
+    double rdpEpsilon,
+    int startId,
+  ) {
+    final total = width * height;
     final lineCommands = <AutodrawCommand>[];
-    final maxLinePaths = (params.maxPaths * 0.45).round().clamp(10, 1500);
+    final maxLinePaths = (maxPaths * 0.45).round().clamp(10, 1500);
 
     // 1. Integral Image Adaptive Thresholding + Sobel Edge detection
     final binaryMap = Uint8List(total);
     final edgeMap = Uint8List(total);
 
-    // Compute integral image
     final integral = Int32List(total);
     for (int y = 0; y < height; y++) {
       int rowSum = 0;
@@ -150,7 +661,6 @@ class PotraceVectorizer {
       for (int x = 1; x < width - 1; x++) {
         final idx = rowOff + x;
 
-        // Sobel kernels
         final p00 = lum[idx - width - 1];
         final p01 = lum[idx - width];
         final p02 = lum[idx - width + 1];
@@ -164,7 +674,6 @@ class PotraceVectorizer {
         final gy = (p20 + 2 * p21 + p22) - (p00 + 2 * p01 + p02);
         final mag = (gx.abs() + gy.abs()) >> 1;
 
-        // Color difference
         final leftOff = (idx - 1) * 4;
         final rightOff = (idx + 1) * 4;
         final cDiff =
@@ -176,7 +685,6 @@ class PotraceVectorizer {
           edgeMap[idx] = 1;
         }
 
-        // Adaptive threshold
         final x0 = math.max(0, x - winR);
         final y0 = math.max(0, y - winR);
         final x1 = math.min(width - 1, x + winR);
@@ -195,7 +703,7 @@ class PotraceVectorizer {
       }
     }
 
-    // 1b. Mandate 1: 3x3 Median Filter to remove salt-and-pepper noise
+    // 3x3 Median Filter to remove salt-and-pepper noise
     final medianFiltered = Uint8List(total);
     for (int y = 0; y < height; y++) {
       final yTop = math.max(0, y - 1);
@@ -218,7 +726,7 @@ class PotraceVectorizer {
     }
     binaryMap.setAll(0, medianFiltered);
 
-    // 1c. Mandate 1: Connected Component Analysis (CCA) - Delete components < 15 px
+    // Connected Component Analysis (CCA) - Delete components < 15 px
     final visitedCca = Uint8List(total);
     final component = <int>[];
     final queue = <int>[];
@@ -257,7 +765,6 @@ class PotraceVectorizer {
           }
         }
 
-        // Isolated component smaller than 15 pixels must be deleted
         if (component.length < 15) {
           for (final cIdx in component) {
             binaryMap[cIdx] = 0;
@@ -266,13 +773,12 @@ class PotraceVectorizer {
       }
     }
 
-    // 2. Medial Axis via 2-Pass Chamfer Distance Transform
+    // Medial Axis via 2-Pass Chamfer Distance Transform
     final distMap = Uint16List(total);
     for (int i = 0; i < total; i++) {
       distMap[i] = binaryMap[i] == 1 ? 9999 : 0;
     }
 
-    // Forward pass
     for (int y = 1; y < height - 1; y++) {
       final row = y * width;
       for (int x = 1; x < width - 1; x++) {
@@ -288,7 +794,6 @@ class PotraceVectorizer {
       }
     }
 
-    // Backward pass
     for (int y = height - 2; y >= 1; y--) {
       final row = y * width;
       for (int x = width - 2; x >= 1; x--) {
@@ -304,12 +809,11 @@ class PotraceVectorizer {
       }
     }
 
-    // 3. Guo-Hall Thinning (Parallel 2-Subiteration Centerline Thinning)
+    // Guo-Hall Thinning (Parallel 2-Subiteration Centerline Thinning)
     final skeleton = Uint8List.fromList(binaryMap);
     final toDelete = <int>[];
 
     for (int iter = 0; iter < 48; iter++) {
-      // Sub-iteration 1
       toDelete.clear();
       for (int y = 1; y < height - 1; y++) {
         final row = y * width;
@@ -348,7 +852,6 @@ class PotraceVectorizer {
       }
       final sub1Deleted = toDelete.length;
 
-      // Sub-iteration 2
       toDelete.clear();
       for (int y = 1; y < height - 1; y++) {
         final row = y * width;
@@ -389,7 +892,7 @@ class PotraceVectorizer {
       if (sub1Deleted == 0 && toDelete.isEmpty) break;
     }
 
-    // 4. Trace 8-Connected Skeleton Pixels into Polylines + Spur Pruning (< 6px)
+    // Polyline tracing
     final visitedSkel = Uint8List(total);
     final candidateStrokes = <List<Offset>>[];
     final strokeWidths = <double>[];
@@ -433,15 +936,15 @@ class PotraceVectorizer {
           cy = ny;
         }
 
-        // Spur pruning: Ignore short spurs (< 6px) to eliminate double-loops & visual noise
+        // Spur pruning (< 6px)
         double strokeLen = 0.0;
         for (int k = 1; k < polyline.length; k++) {
           strokeLen += (polyline[k] - polyline[k - 1]).distance;
         }
         if (strokeLen < 6.0 && polyline.length < 5) continue;
 
-        // Simplify using Ramer-Douglas-Peucker (RDP) epsilon = 0.3px to preserve smooth curvature
-        final simplified = _rdpSimplify(polyline, 0.3);
+        // RDP Simplification (with rdpEpsilon)
+        final simplified = _rdpSimplify(polyline, rdpEpsilon);
         if (simplified.length < 2) continue;
 
         candidateStrokes.add(simplified);
@@ -449,7 +952,7 @@ class PotraceVectorizer {
       }
     }
 
-    // 5. 256x256 Tone Coverage Buffer to Skip Redundant Hatching (> 92%)
+    // 256x256 Tone Coverage Buffer
     const covDim = 256;
     final covBuffer = Uint8List(covDim * covDim);
     final acceptedStrokes = <List<Offset>>[];
@@ -466,10 +969,9 @@ class PotraceVectorizer {
         }
       }
       if (st.length > 3 && overdrawnPts > (st.length * 0.92)) {
-        continue; // Skip redundant overlapping lines
+        continue;
       }
 
-      // Mark coverage buffer
       for (final pt in st) {
         final cx = ((pt.dx / width) * covDim).round().clamp(0, covDim - 1);
         final cy = ((pt.dy / height) * covDim).round().clamp(0, covDim - 1);
@@ -483,11 +985,10 @@ class PotraceVectorizer {
       acceptedWidths.add(strokeWidths[i]);
     }
 
-    // 6. Greedy Nearest-Endpoint TSP Stroke Ordering (Major Structures First)
+    // TSP Ordering
     final orderedStrokes = <List<Offset>>[];
     final orderedWidths = <double>[];
     if (acceptedStrokes.isNotEmpty) {
-      // Sort primary structures (longest) first
       final indexed = List.generate(acceptedStrokes.length, (i) => i);
       indexed.sort((a, b) {
         return acceptedStrokes[b].length.compareTo(acceptedStrokes[a].length);
@@ -532,7 +1033,9 @@ class PotraceVectorizer {
       }
     }
 
-    // 7. Fit smooth Bézier curves to centerline skeleton strokes for Pass 1
+    // Bézier curve fitting scaled up to screen resolution (scaleX, scaleY)
+    final avgScale = (scaleX + scaleY) * 0.5;
+    int curId = startId;
     for (
       int i = 0;
       i < orderedStrokes.length && lineCommands.length < maxLinePaths;
@@ -549,33 +1052,46 @@ class PotraceVectorizer {
         final t0 = (p3 - prev) * 0.35;
         final t3 = (next - p0) * 0.35;
         final cp1 = Offset(
-          (p0.dx + t0.dx / 3.0).clamp(0.0, width.toDouble()),
-          (p0.dy + t0.dy / 3.0).clamp(0.0, height.toDouble()),
+          ((p0.dx + t0.dx / 3.0).clamp(0.0, width.toDouble())) * scaleX,
+          ((p0.dy + t0.dy / 3.0).clamp(0.0, height.toDouble())) * scaleY,
         );
         final cp2 = Offset(
-          (p3.dx - t3.dx / 3.0).clamp(0.0, width.toDouble()),
-          (p3.dy - t3.dy / 3.0).clamp(0.0, height.toDouble()),
+          ((p3.dx - t3.dx / 3.0).clamp(0.0, width.toDouble())) * scaleX,
+          ((p3.dy - t3.dy / 3.0).clamp(0.0, height.toDouble())) * scaleY,
         );
-        segments.add(BezierSegment(cp1: cp1, cp2: cp2, end: p3));
+        final scaledP3 = Offset(p3.dx * scaleX, p3.dy * scaleY);
+        segments.add(BezierSegment(cp1: cp1, cp2: cp2, end: scaledP3));
       }
 
       lineCommands.add(
         AutodrawCommand.drawLine(
-          id: nextCommandId++,
-          startPoint: poly.first,
+          id: curId++,
+          startPoint: Offset(poly.first.dx * scaleX, poly.first.dy * scaleY),
           segments: segments,
-          strokeWidth: orderedWidths[i],
+          strokeWidth: (orderedWidths[i] * avgScale).clamp(1.0, 3.5),
           color: const Color(0xFF1E1E24),
           layer: AutodrawTonalLayer.background,
         ),
       );
     }
 
-    // -------------------------------------------------------------------------
-    // PASS 2: The Color (Fills) - Sampled average color with broad brush
-    // -------------------------------------------------------------------------
+    return lineCommands;
+  }
+
+  /// Pass 2: The Color (Fills) - Sampled average color with broad brush
+  static List<AutodrawCommand> _extractFillCommands(
+    Uint8List rgba,
+    Uint8List lum,
+    int width,
+    int height,
+    int maxPaths,
+    double scaleX,
+    double scaleY,
+    int startId,
+  ) {
+    final total = width * height;
     final fillCommands = <AutodrawCommand>[];
-    final maxFillPaths = (params.maxPaths * 0.40).round().clamp(10, 1500);
+    final maxFillPaths = (maxPaths * 0.40).round().clamp(10, 1500);
 
     final tonalBands = const [
       (0, 50),
@@ -584,6 +1100,9 @@ class PotraceVectorizer {
       (150, 200),
       (200, 256),
     ];
+
+    final avgScale = (scaleX + scaleY) * 0.5;
+    int curId = startId;
 
     for (final (low, high) in tonalBands) {
       if (fillCommands.length >= maxFillPaths) break;
@@ -636,26 +1155,20 @@ class PotraceVectorizer {
             if (isEnd) {
               final runLen = x - runStart + 1;
               if (runLen >= 3) {
-                final p0 = Offset(runStart.toDouble(), y.toDouble());
-                final p3 = Offset(x.toDouble(), y.toDouble());
+                final p0 = Offset(runStart * scaleX, y * scaleY);
+                final p3 = Offset(x * scaleX, y * scaleY);
 
                 final arcY = (y + (y % 4 == 0 ? 1.5 : -1.5)).toDouble().clamp(
                   0.0,
                   height.toDouble(),
                 );
                 final cp1 = Offset(
-                  (runStart + (x - runStart) * 0.33).clamp(
-                    0.0,
-                    width.toDouble(),
-                  ),
-                  arcY,
+                  (runStart + (x - runStart) * 0.33) * scaleX,
+                  arcY * scaleY,
                 );
                 final cp2 = Offset(
-                  (runStart + (x - runStart) * 0.66).clamp(
-                    0.0,
-                    width.toDouble(),
-                  ),
-                  arcY,
+                  (runStart + (x - runStart) * 0.66) * scaleX,
+                  arcY * scaleY,
                 );
 
                 final perceptualColor =
@@ -695,11 +1208,11 @@ class PotraceVectorizer {
 
                 fillCommands.add(
                   AutodrawCommand.fillRegion(
-                    id: nextCommandId++,
+                    id: curId++,
                     startPoint: p0,
                     segments: [BezierSegment(cp1: cp1, cp2: cp2, end: p3)],
                     color: perceptualColor,
-                    strokeWidth: dynFillWidth,
+                    strokeWidth: (dynFillWidth * avgScale).clamp(4.0, 30.0),
                     isClosed: false,
                     layer: strokeLayer,
                   ),
@@ -714,8 +1227,11 @@ class PotraceVectorizer {
         y += fillStride;
       }
 
-      // Add closed perimeter fills for the region to guarantee solid contour fill
+      // Add closed perimeter fills for the region
       final visitedPerimeter = Uint8List(total);
+      const dx = [1, 1, 0, -1, -1, -1, 0, 1];
+      const dy = [0, 1, 1, 1, 0, -1, -1, -1];
+
       for (int y = 2; y < height - 2; y += 4) {
         if (fillCommands.length >= maxFillPaths) break;
         for (int x = 2; x < width - 2; x += 4) {
@@ -760,7 +1276,13 @@ class PotraceVectorizer {
               final p0 = contour[k];
               final p1 = contour[k + 1];
               final cp = (p0 + p1) * 0.5;
-              segs.add(BezierSegment(cp1: cp, cp2: cp, end: p1));
+              segs.add(
+                BezierSegment(
+                  cp1: Offset(cp.dx * scaleX, cp.dy * scaleY),
+                  cp2: Offset(p1.dx * scaleX, p1.dy * scaleY),
+                  end: Offset(p1.dx * scaleX, p1.dy * scaleY),
+                ),
+              );
             }
             final contourIndices = <int>[];
             for (final pt in contour) {
@@ -777,11 +1299,14 @@ class PotraceVectorizer {
             );
             fillCommands.add(
               AutodrawCommand.fillRegion(
-                id: nextCommandId++,
-                startPoint: contour.first,
+                id: curId++,
+                startPoint: Offset(
+                  contour.first.dx * scaleX,
+                  contour.first.dy * scaleY,
+                ),
                 segments: segs,
                 color: contourColor,
-                strokeWidth: 6.0,
+                strokeWidth: (6.0 * avgScale).clamp(3.0, 18.0),
                 isClosed: true,
                 layer: regionLayer,
               ),
@@ -791,11 +1316,23 @@ class PotraceVectorizer {
       }
     }
 
-    // -------------------------------------------------------------------------
-    // PASS 3: The Highlights - Bright spots (Luminance > 0.85)
-    // -------------------------------------------------------------------------
+    return fillCommands;
+  }
+
+  /// Pass 3: The Highlights - Bright spots (Luminance > 0.85)
+  static List<AutodrawCommand> _extractHighlightCommands(
+    Uint8List rgba,
+    Uint8List lum,
+    int width,
+    int height,
+    int maxPaths,
+    double scaleX,
+    double scaleY,
+    int startId,
+  ) {
+    final total = width * height;
     final highlightCommands = <AutodrawCommand>[];
-    final maxHighlightPaths = (params.maxPaths * 0.20).round().clamp(10, 600);
+    final maxHighlightPaths = (maxPaths * 0.20).round().clamp(10, 600);
 
     const hiThreshold = 217;
     final hiMask = Uint8List(total);
@@ -823,6 +1360,11 @@ class PotraceVectorizer {
     }
 
     final visitedHi = Uint8List(total);
+    const dx = [1, 1, 0, -1, -1, -1, 0, 1];
+    const dy = [0, 1, 1, 1, 0, -1, -1, -1];
+    final avgScale = (scaleX + scaleY) * 0.5;
+    int curId = startId;
+
     for (int y = 1; y < height - 1; y++) {
       if (highlightCommands.length >= maxHighlightPaths) break;
       for (int x = 1; x < width - 1; x++) {
@@ -861,7 +1403,13 @@ class PotraceVectorizer {
             final p0 = contour[k];
             final p1 = contour[k + 1];
             final cp = (p0 + p1) * 0.5;
-            segs.add(BezierSegment(cp1: cp, cp2: cp, end: p1));
+            segs.add(
+              BezierSegment(
+                cp1: Offset(cp.dx * scaleX, cp.dy * scaleY),
+                cp2: Offset(p1.dx * scaleX, p1.dy * scaleY),
+                end: Offset(p1.dx * scaleX, p1.dy * scaleY),
+              ),
+            );
           }
 
           final hiGrad = AutodrawAnalysisEngine.computeSobelGradient(
@@ -894,10 +1442,13 @@ class PotraceVectorizer {
 
           highlightCommands.add(
             AutodrawCommand.drawHighlight(
-              id: nextCommandId++,
-              startPoint: contour.first,
+              id: curId++,
+              startPoint: Offset(
+                contour.first.dx * scaleX,
+                contour.first.dy * scaleY,
+              ),
               segments: segs,
-              strokeWidth: hiWidth,
+              strokeWidth: (hiWidth * avgScale).clamp(1.0, 3.5),
               color: hiColor,
               layer: AutodrawTonalLayer.highlights,
             ),
@@ -906,115 +1457,7 @@ class PotraceVectorizer {
       }
     }
 
-    // -------------------------------------------------------------------------
-    // Fallback on flat/tiny images
-    // -------------------------------------------------------------------------
-    if (lineCommands.isEmpty && width > 0 && height > 0) {
-      final fw = width.toDouble();
-      final fh = height.toDouble();
-      lineCommands.add(
-        AutodrawCommand.drawLine(
-          id: nextCommandId++,
-          startPoint: Offset.zero,
-          segments: [
-            BezierSegment(
-              cp1: Offset(fw * 0.33, 0),
-              cp2: Offset(fw * 0.66, 0),
-              end: Offset(fw, 0),
-            ),
-            BezierSegment(
-              cp1: Offset(fw, fh * 0.33),
-              cp2: Offset(fw, fh * 0.66),
-              end: Offset(fw, fh),
-            ),
-            BezierSegment(
-              cp1: Offset(fw * 0.66, fh),
-              cp2: Offset(fw * 0.33, fh),
-              end: Offset(0, fh),
-            ),
-            BezierSegment(
-              cp1: Offset(0, fh * 0.66),
-              cp2: Offset(0, fh * 0.33),
-              end: Offset.zero,
-            ),
-          ],
-          strokeWidth: 1.5,
-          color: const Color(0xFF1E1E24),
-          layer: AutodrawTonalLayer.background,
-        ),
-      );
-    }
-
-    if (fillCommands.isEmpty && width > 0 && height > 0) {
-      final midX = width ~/ 2;
-      final midY = height ~/ 2;
-      final off = (midY * width + midX) * 4;
-      final c = Color.fromARGB(255, rgba[off], rgba[off + 1], rgba[off + 2]);
-      fillCommands.add(
-        AutodrawCommand.fillRegion(
-          id: nextCommandId++,
-          startPoint: Offset(width * 0.2, height * 0.5),
-          segments: [
-            BezierSegment(
-              cp1: Offset(width * 0.4, height * 0.48),
-              cp2: Offset(width * 0.6, height * 0.52),
-              end: Offset(width * 0.8, height * 0.5),
-            ),
-          ],
-          color: c,
-          strokeWidth: 10.0,
-          isClosed: false,
-          layer: AutodrawTonalLayer.midtones,
-        ),
-      );
-    }
-
-    if (highlightCommands.isEmpty && width > 0 && height > 0) {
-      highlightCommands.add(
-        AutodrawCommand.drawHighlight(
-          id: nextCommandId++,
-          startPoint: Offset(width * 0.45, height * 0.45),
-          segments: [
-            BezierSegment(
-              cp1: Offset(width * 0.48, height * 0.45),
-              cp2: Offset(width * 0.52, height * 0.45),
-              end: Offset(width * 0.55, height * 0.45),
-            ),
-          ],
-          strokeWidth: 2.0,
-          color: const Color(0xFFFFFFFF),
-          layer: AutodrawTonalLayer.highlights,
-        ),
-      );
-    }
-
-    // -------------------------------------------------------------------------
-    // FINAL SORTING (Mandates 1 & 2): Strictly ordered
-    // All Lines -> All Fills -> All Highlights
-    // -------------------------------------------------------------------------
-    final allCommands = <AutodrawCommand>[
-      ...lineCommands,
-      ...fillCommands,
-      ...highlightCommands,
-    ];
-
-    allCommands.sort(
-      (a, b) => a.actionType.orderIndex.compareTo(b.actionType.orderIndex),
-    );
-
-    // Package zero-copy FlatStrokeBuffer
-    final flatBuffer = FlatStrokeBuffer.fromCommands(
-      allCommands,
-      width,
-      height,
-    );
-
-    return AutodrawVectorizationResult(
-      width: width,
-      height: height,
-      commands: allCommands,
-      flatStrokeBuffer: flatBuffer,
-    );
+    return highlightCommands;
   }
 
   /// Ramer-Douglas-Peucker (RDP) Polyline Simplification
