@@ -557,18 +557,73 @@ class _AutodrawScreenState extends State<AutodrawScreen>
                           key: _canvasKey,
                           child: Container(
                             color: Colors.white,
-                            child: CustomPaint(
-                              painter: AutodrawPainter(
-                                strokes: _vectorResult?.strokes ?? [],
-                                completedCount: _currentStrokeIndex,
-                                currentProgress: _currentStrokeProgress,
-                                accentColor: accentColor,
-                                sourceWidth: _vectorResult?.width ?? 1,
-                                sourceHeight: _vectorResult?.height ?? 1,
-                                renderCache: _renderCache,
-                                flatBuffer: _vectorResult?.flatBuffer,
-                              ),
-                              size: Size.infinite,
+                            child: Stack(
+                              children: [
+                                Positioned.fill(
+                                  child: CustomPaint(
+                                    painter: AutodrawPainter(
+                                      strokes: _vectorResult?.strokes ?? [],
+                                      completedCount: _currentStrokeIndex,
+                                      currentProgress: _currentStrokeProgress,
+                                      accentColor: accentColor,
+                                      sourceWidth: _vectorResult?.width ?? 1,
+                                      sourceHeight: _vectorResult?.height ?? 1,
+                                      renderCache: _renderCache,
+                                      flatBuffer: _vectorResult?.flatBuffer,
+                                    ),
+                                    size: Size.infinite,
+                                  ),
+                                ),
+                                // Mandate 3: Tiny spinner overlay when buffering incoming details
+                                if (_isBufferingDetails &&
+                                    !_isProgressiveComplete)
+                                  Center(
+                                    child: Container(
+                                      key: const Key(
+                                        'autodraw_buffering_spinner',
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 8,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withValues(
+                                          alpha: 0.65,
+                                        ),
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(
+                                          color: Colors.white24,
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: const Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          SizedBox(
+                                            width: 14,
+                                            height: 14,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              valueColor:
+                                                  AlwaysStoppedAnimation(
+                                                    Colors.white,
+                                                  ),
+                                            ),
+                                          ),
+                                          SizedBox(width: 8),
+                                          Text(
+                                            'Preparing details...',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w500,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
                         ),
@@ -832,8 +887,10 @@ class AutodrawPainter extends CustomPainter {
     final isFill = stroke.actionType == AutodrawActionType.fillRegion;
     final isLine = stroke.actionType == AutodrawActionType.drawLine;
     final baseColor = stroke.strokeColor;
+    // Mandate 2: Calculate stroke width dynamically using Distance Transform (1.0px thin to wider brush)
+    final dynamicWidth = stroke.strokeWidth.clamp(1.0, 20.0);
 
-    // Mandate 2: When a line stroke is fully drawn, render continuous path with rounded joints & single-pixel width
+    // Mandate 2: When a line stroke is fully drawn, render continuous path with rounded joints & dynamic width
     if (isLine && progress >= 1.0) {
       final paint = Paint()
         ..isAntiAlias = true
@@ -842,7 +899,7 @@ class AutodrawPainter extends CustomPainter {
         ..strokeJoin = StrokeJoin.round
         ..blendMode = BlendMode.multiply
         ..color = baseColor
-        ..strokeWidth = 1.0;
+        ..strokeWidth = dynamicWidth;
       canvas.drawPath(scaledPath, paint);
       return;
     }
@@ -851,12 +908,14 @@ class AutodrawPainter extends CustomPainter {
     if (metrics.isEmpty) return;
 
     final maxAllowedWidth = isFill
-        ? stroke.strokeWidth.clamp(4.0, 12.0)
+        ? stroke.strokeWidth.clamp(4.0, 24.0)
         : isLine
-        ? 1.0
-        : stroke.strokeWidth.clamp(1.0, 2.0);
+        ? dynamicWidth
+        : stroke.strokeWidth.clamp(1.0, 3.0);
 
-    final minWidth = isFill ? (maxAllowedWidth * 0.45) : 1.0;
+    final minWidth = isFill
+        ? (maxAllowedWidth * 0.45)
+        : math.max(1.0, dynamicWidth * 0.4);
 
     for (final metric in metrics) {
       final totalLen = metric.length;
@@ -905,7 +964,7 @@ class AutodrawPainter extends CustomPainter {
           ..strokeJoin = StrokeJoin.round
           ..blendMode = isFill ? BlendMode.srcOver : BlendMode.multiply
           ..color = segColor
-          ..strokeWidth = strokeWidth;
+          ..strokeWidth = strokeWidth.clamp(1.0, 20.0);
 
         canvas.drawPath(segPath, paint);
       }

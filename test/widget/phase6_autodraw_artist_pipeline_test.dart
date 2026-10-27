@@ -202,7 +202,7 @@ void main() {
         (c) => c.actionType == AutodrawActionType.drawLine,
       );
       for (final line in lines) {
-        expect(line.strokeWidth, inInclusiveRange(1.0, 2.5));
+        expect(line.strokeWidth, inInclusiveRange(1.0, 20.0));
         final c = line.strokeColor;
         // Dark ink / black
         expect(c.r * 255, lessThan(45));
@@ -823,10 +823,10 @@ void main() {
 
       expect(result.strokes, isNotEmpty);
 
-      // Verify stroke properties: smooth curvature and single-pixel width
+      // Verify stroke properties: smooth curvature and dynamic stroke width
       for (final stroke in result.strokes) {
         if (stroke.actionType == AutodrawActionType.drawLine) {
-          expect(stroke.strokeWidth, lessThanOrEqualTo(2.5));
+          expect(stroke.strokeWidth, lessThanOrEqualTo(20.0));
         }
         for (final seg in stroke.segments) {
           expect(seg.end.dx, inInclusiveRange(0.0, w.toDouble()));

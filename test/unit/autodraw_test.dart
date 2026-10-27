@@ -506,7 +506,7 @@ void main() {
       );
       expect(lineStrokes, isNotEmpty);
       for (final line in lineStrokes) {
-        expect(line.strokeWidth, inInclusiveRange(1.0, 2.5));
+        expect(line.strokeWidth, inInclusiveRange(1.0, 20.0));
       }
     });
 

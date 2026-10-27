@@ -1837,9 +1837,9 @@ StrokeBuffer* native_skeleton_trace(
     if (!rgba || width <= 0 || height <= 0) return nullptr;
     if (max_strokes <= 0) max_strokes = 2500;
 
-    // 1. Mandate 2: Resolution Ladder downscale to max 512px for bounded latency & 90% compute reduction
+    // 1. Mandate 1: Resolution Ladder downscale to max 1024px for high-detail skeletonization
     int max_dim = std::max(width, height);
-    float scale = (max_dim > 512) ? (512.0f / max_dim) : 1.0f;
+    float scale = (max_dim > 1024) ? (1024.0f / max_dim) : 1.0f;
     int proc_w = std::max(1, static_cast<int>(std::round(width * scale)));
     int proc_h = std::max(1, static_cast<int>(std::round(height * scale)));
 
@@ -2118,11 +2118,11 @@ StrokeBuffer* native_skeleton_trace(
         }
         if (total_len < 6.0f || polyline.size() < 2) continue;
 
-        // RDP polyline simplification (epsilon = 0.3px to preserve smooth curvature)
+        // Mandate 2: RDP polyline simplification (epsilon = 0.2px for very precise, smooth curvature)
         std::vector<bool> keep(polyline.size(), false);
         keep.front() = true;
         keep.back() = true;
-        rdp_simplify(polyline, 0, static_cast<int>(polyline.size()) - 1, 0.3f, keep);
+        rdp_simplify(polyline, 0, static_cast<int>(polyline.size()) - 1, 0.2f, keep);
 
         std::vector<SkeletonPoint> simplified;
         for (size_t i = 0; i < polyline.size(); ++i) {
