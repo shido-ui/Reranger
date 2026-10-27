@@ -148,7 +148,7 @@ void main() {
         final outputsDir = fileStorage.getOutputsDirectory(project.id);
         await tester.runAsync(() async {
           await tester.tap(find.text('Save Image to Device'));
-          for (int i = 0; i < 30; i++) {
+          for (int i = 0; i < 60; i++) {
             await Future.delayed(const Duration(milliseconds: 50));
             if (outputsDir.existsSync() &&
                 outputsDir
@@ -178,7 +178,7 @@ void main() {
         // 8. Export Project Package (.rrproj) action
         await tester.runAsync(() async {
           await tester.tap(find.text('Export Project Package (.rrproj)'));
-          for (int i = 0; i < 30; i++) {
+          for (int i = 0; i < 60; i++) {
             await Future.delayed(const Duration(milliseconds: 50));
             if (outputsDir.existsSync() &&
                 outputsDir

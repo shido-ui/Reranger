@@ -532,23 +532,25 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // 1. Run entire graph (including Stealth nodes) at final export resolution (scale: 1.0)
-      final fullImg = await renderFullResolutionOutput(scale: 1.0);
-
-      // 2. Encode through ImageExporter with ExportConfiguration containing realism
-      final exporter = ImageExporter();
-      final config = ExportConfiguration(
-        format: ExportImageFormat.png,
-        quality: 100,
-        scale: 1.0,
-        stripGpsMetadata: true,
-        realism: realism,
-      );
-
-      final encoded = exporter.encode(sourceImage: fullImg, config: config);
-
-      // Verify stripMetadata is executed on final exported bytes
-      final exportBytes = MetadataAnnihilator.stripMetadata(encoded.bytes);
+      Uint8List exportBytes = previewPngBytes!;
+      // If preview was rendered at downscaled resolution or realism is active, perform full 1.0 scale render for lossless archival
+      if (project!.sourceWidth > 1536 ||
+          project!.sourceHeight > 1536 ||
+          realism > 0.0) {
+        final fullImg = await renderFullResolutionOutput(scale: 1.0);
+        final exporter = ImageExporter();
+        final config = ExportConfiguration(
+          format: ExportImageFormat.png,
+          quality: 100,
+          scale: 1.0,
+          stripGpsMetadata: true,
+          realism: realism,
+        );
+        final encoded = exporter.encode(sourceImage: fullImg, config: config);
+        exportBytes = MetadataAnnihilator.stripMetadata(encoded.bytes);
+      } else {
+        exportBytes = MetadataAnnihilator.stripMetadata(exportBytes);
+      }
 
       final fileName = 'export_${DateTime.now().millisecondsSinceEpoch}.png';
       final writeResult = await fileStorage.saveOutput(
