@@ -184,9 +184,9 @@ class ImageExporter {
         break;
     }
 
-    // 5. Metadata Annihilation for Stealth Export
-    if (config.realism > 0.0) {
-      encodedBytes = MetadataAnnihilator.strip(encodedBytes);
+    // 5. Metadata Annihilation for Stealth Export & Privacy Policy
+    if (config.realism > 0.0 || config.stripGpsMetadata) {
+      encodedBytes = MetadataAnnihilator.stripMetadata(encodedBytes);
     }
 
     return (

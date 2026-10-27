@@ -415,13 +415,32 @@ class RenderGraphExecutor {
       );
     } else if (node is ARMORAttackNode) {
       final input = nodeOutputs[node.inputNodeIds[0]]!;
+      Uint8List working = input;
+      if (node.bilateralSanitization) {
+        working = _computeBilateralSanitization(
+          input: working,
+          width: width,
+          height: height,
+          strength: node.strength,
+          isCancelled: isCancelled,
+        );
+      }
+      if (node.latentSanitization) {
+        working = _computeLatentSanitization(
+          input: working,
+          width: width,
+          height: height,
+          strength: node.strength,
+          isCancelled: isCancelled,
+        );
+      }
       return _computeARMORAttack(
-        input: input,
+        input: working,
         width: width,
         height: height,
         strength: node.strength,
-        maxLInf: 8.0,
-        useEot: false,
+        maxLInf: node.maxLInf,
+        useEot: node.useEot,
         isCancelled: isCancelled,
       );
     } else if (node is SensorNoiseNode) {

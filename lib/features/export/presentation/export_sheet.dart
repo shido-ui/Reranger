@@ -45,6 +45,7 @@ class _ExportSheetState extends State<ExportSheet> {
   int _quality = 90;
   double _scale = 1.0;
   bool _stripGps = true;
+  double _realism = 0.0;
   bool _isExporting = false;
   String? _exportSuccessMessage;
   String? _errorMessage;
@@ -52,6 +53,7 @@ class _ExportSheetState extends State<ExportSheet> {
   @override
   void initState() {
     super.initState();
+    _realism = widget.controller.realism;
     _scale = widget.controller.renderScale;
     final fmt = widget.controller.exportFormat.toUpperCase();
     if (fmt == 'JPEG' || fmt == 'JPG') {
@@ -93,6 +95,7 @@ class _ExportSheetState extends State<ExportSheet> {
       quality: _quality,
       scale: _scale,
       stripGpsMetadata: _stripGps,
+      realism: _realism,
     );
 
     final estimatedBytes = RealSizeEstimator.estimateSizeBytes(
@@ -355,6 +358,64 @@ class _ExportSheetState extends State<ExportSheet> {
                 ),
                 const SizedBox(height: AppSpacingTokens.md),
 
+                // Realism & Hardware Defense (Stealth Engine V2)
+                Material(
+                  color: surfaceBase,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: AppRadiusTokens.borderMd,
+                    side: BorderSide(color: borderSubtle),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(AppSpacingTokens.sm),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Realism Defense',
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                color: primaryText,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              '${(_realism * 100).round()}%',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.primary,
+                                fontWeight: FontWeight.bold,
+                                fontFamily: 'monospace',
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'ARMOR UAP DCT perturbation, Bayer noise & 100% EXIF/C2PA metadata stripping.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: secondaryText,
+                          ),
+                        ),
+                        Slider(
+                          key: const Key('export_realism_slider'),
+                          value: _realism,
+                          min: 0.0,
+                          max: 1.0,
+                          divisions: 20,
+                          onChanged: (val) {
+                            setState(() {
+                              _realism = val;
+                              widget.controller.setRealism(val);
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacingTokens.md),
+
                 // 5. Real Estimated File Size
                 Container(
                   padding: const EdgeInsets.all(AppSpacingTokens.sm),
@@ -495,6 +556,7 @@ class _ExportSheetState extends State<ExportSheet> {
         quality: _quality,
         scale: 1.0, // Scale already applied by renderFullResolutionOutput
         stripGpsMetadata: _stripGps,
+        realism: _realism,
       );
 
       final exporter = ImageExporter();

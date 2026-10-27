@@ -15,6 +15,8 @@ import '../../../domain/project/project_entity.dart';
 import '../../../domain/recipes/render_graph.dart';
 import '../../../domain/recipes/render_graph_node.dart';
 import '../../../domain/recipes/adversarial_stealth_node.dart';
+import '../../export/data/image_exporter.dart';
+import '../../export/domain/export_format.dart';
 import '../../presets/data/preset_catalog.dart';
 import 'layer_history_controller.dart';
 
@@ -340,6 +342,8 @@ class EditorController extends ChangeNotifier {
     if (realism == clamped) return;
     realism = clamped;
     notifyListeners();
+    _recordDirtyJournal();
+    _dispatchRender();
   }
 
   void _onLayerStackChanged() {
@@ -348,6 +352,7 @@ class EditorController extends ChangeNotifier {
   }
 
   /// Builds the active [RenderGraph], composing non-destructive layers on top of base presets (Prompt B).
+  /// Wires Robust Stealth Engine V2 (ARMOR UAP DCT perturbation & sensor noise) when realism > 0.0.
   RenderGraph buildActiveGraph() {
     var graph = activePreset!.buildGraph(
       project!.sourceImageHash,
@@ -361,6 +366,34 @@ class EditorController extends ChangeNotifier {
         layerHistoryController!.state.layerStack.layers.length > 1) {
       graph = layerHistoryController!.state.layerStack.toRenderGraph(
         baseGraph: graph,
+      );
+    }
+
+    // Include Stealth Engine nodes in the active graph when realism > 0.0
+    if (realism > 0.0) {
+      final outNodeId = graph.outputNodeId;
+      final armorNode = ARMORAttackNode(
+        id: 'armor_live_${graph.id}',
+        inputNodeId: outNodeId,
+        strength: realism,
+        maxLInf: 16.0,
+        useEot: true,
+        bilateralSanitization: true,
+      );
+      final sensorNode = SensorNoiseNode(
+        id: 'sensor_live_${graph.id}',
+        inputNodeId: armorNode.id,
+        noiseIntensity: (realism * 0.4).clamp(0.0, 1.0),
+        chromaticAberration: (realism * 0.3).clamp(0.0, 1.0),
+      );
+      final updatedNodes = Map<String, RenderGraphNode>.from(graph.nodes);
+      updatedNodes[armorNode.id] = armorNode;
+      updatedNodes[sensorNode.id] = sensorNode;
+      graph = RenderGraph(
+        id: graph.id,
+        version: graph.version,
+        nodes: updatedNodes,
+        outputNodeId: sensorNode.id,
       );
     }
 
@@ -437,13 +470,19 @@ class EditorController extends ChangeNotifier {
 
     var fullGraph = buildActiveGraph();
 
-    // Wire Stealth Engine V2 if Realism > 0.0
-    if (realism > 0.0) {
+    // Ensure Stealth Engine nodes are wired if Realism > 0.0
+    final hasStealth = fullGraph.nodes.values.any(
+      (n) => n is ARMORAttackNode || n is SensorNoiseNode,
+    );
+    if (realism > 0.0 && !hasStealth) {
       final outNodeId = fullGraph.outputNodeId;
       final armorNode = ARMORAttackNode(
         id: 'armor_export_${DateTime.now().microsecondsSinceEpoch}',
         inputNodeId: outNodeId,
         strength: realism,
+        maxLInf: 16.0,
+        useEot: true,
+        bilateralSanitization: true,
       );
       final sensorNode = SensorNoiseNode(
         id: 'sensor_export_${DateTime.now().microsecondsSinceEpoch}',
@@ -464,7 +503,7 @@ class EditorController extends ChangeNotifier {
 
     // Apply metadata annihilation before rendering
     final workingSourceBytes = realism > 0.0
-        ? MetadataAnnihilator.strip(sourceImageBytes!)
+        ? MetadataAnnihilator.stripMetadata(sourceImageBytes!)
         : sourceImageBytes!;
 
     final fullResult = await renderJobController.executor.execute(
@@ -493,18 +532,23 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      Uint8List exportBytes = previewPngBytes!;
-      // If preview was rendered at downscaled resolution or realism is active, perform full 1.0 scale render for lossless archival
-      if (project!.sourceWidth > 1536 ||
-          project!.sourceHeight > 1536 ||
-          realism > 0.0) {
-        final fullImg = await renderFullResolutionOutput(scale: 1.0);
-        exportBytes = Uint8List.fromList(img.encodePng(fullImg));
-      }
+      // 1. Run entire graph (including Stealth nodes) at final export resolution (scale: 1.0)
+      final fullImg = await renderFullResolutionOutput(scale: 1.0);
 
-      if (realism > 0.0) {
-        exportBytes = MetadataAnnihilator.strip(exportBytes);
-      }
+      // 2. Encode through ImageExporter with ExportConfiguration containing realism
+      final exporter = ImageExporter();
+      final config = ExportConfiguration(
+        format: ExportImageFormat.png,
+        quality: 100,
+        scale: 1.0,
+        stripGpsMetadata: true,
+        realism: realism,
+      );
+
+      final encoded = exporter.encode(sourceImage: fullImg, config: config);
+
+      // Verify stripMetadata is executed on final exported bytes
+      final exportBytes = MetadataAnnihilator.stripMetadata(encoded.bytes);
 
       final fileName = 'export_${DateTime.now().millisecondsSinceEpoch}.png';
       final writeResult = await fileStorage.saveOutput(
