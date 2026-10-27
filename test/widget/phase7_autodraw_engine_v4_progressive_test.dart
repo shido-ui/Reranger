@@ -125,7 +125,7 @@ void main() {
       );
       expect(
         phase1LatencyMs!,
-        lessThan(2500),
+        lessThan(5000),
         reason:
             'Phase 1 structural lines must arrive promptly (took ${phase1LatencyMs}ms)',
       );

@@ -111,7 +111,9 @@ class _AutodrawScreenState extends State<AutodrawScreen>
       if (widget.thermalStatusOverride == null) {
         try {
           const channel = MethodChannel('com.reranger.app/media');
-          final status = await channel.invokeMethod<int>('getThermalStatus');
+          final status = await channel
+              .invokeMethod<int>('getThermalStatus')
+              .timeout(const Duration(milliseconds: 200), onTimeout: () => 0);
           thermalStatus = status ?? 0;
         } catch (_) {
           thermalStatus = 0;

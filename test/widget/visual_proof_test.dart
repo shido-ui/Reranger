@@ -35,13 +35,14 @@ void main() {
           home: AutodrawScreen(
             projectId: 'visual_proof_proj',
             sourceImageBytes: samplePng,
+            thermalStatusOverride: 0,
           ),
         ),
       );
 
-      // Allow background isolate vectorization to complete
+      // Allow background isolate vectorization to complete (allowing sufficient time on slower CI runners)
       await tester.runAsync(() async {
-        await Future.delayed(const Duration(milliseconds: 300));
+        await Future.delayed(const Duration(milliseconds: 2000));
       });
       await tester.pump(const Duration(milliseconds: 50));
       await tester.pump(const Duration(milliseconds: 50));

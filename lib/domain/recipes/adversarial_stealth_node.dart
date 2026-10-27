@@ -25,10 +25,10 @@ class ARMORAttackNode extends RenderGraphNode {
     this.strength = 0.5,
     this.applyFrequencyPerturbation = true,
     this.multiDomain = true,
-    this.latentSanitization = true,
-    this.maxLInf = 16.0,
-    this.useEot = true,
-    this.bilateralSanitization = true,
+    this.latentSanitization = false,
+    this.maxLInf = 8.0,
+    this.useEot = false,
+    this.bilateralSanitization = false,
     String? type,
   }) : super(
          type: type ?? nodeType,
@@ -77,10 +77,10 @@ class ARMORAttackNode extends RenderGraphNode {
       applyFrequencyPerturbation:
           params['applyFrequencyPerturbation'] as bool? ?? true,
       multiDomain: params['multiDomain'] as bool? ?? true,
-      latentSanitization: params['latentSanitization'] as bool? ?? true,
-      maxLInf: (params['maxLInf'] as num?)?.toDouble() ?? 16.0,
-      useEot: params['useEot'] as bool? ?? true,
-      bilateralSanitization: params['bilateralSanitization'] as bool? ?? true,
+      latentSanitization: params['latentSanitization'] as bool? ?? false,
+      maxLInf: (params['maxLInf'] as num?)?.toDouble() ?? 8.0,
+      useEot: params['useEot'] as bool? ?? false,
+      bilateralSanitization: params['bilateralSanitization'] as bool? ?? false,
     );
   }
 }
